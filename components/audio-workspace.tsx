@@ -39,6 +39,12 @@ export function AudioWorkspace() {
   const [zoom, setZoom] = useState(50)
   const [bpm, setBpm] = useState(140)
   const [isLooping, setIsLooping] = useState(true)
+  const [dragInfo, setDragInfo] = useState<{ 
+    trackId: string; 
+    startX: number; 
+    startPosition: number;
+    currentPosition?: number;
+  } | null>(null)
 
   const audioContext = useRef<AudioContext | null>(null)
   const sourceNodes = useRef<Map<string, AudioBufferSourceNode>>(new Map())
@@ -46,8 +52,9 @@ export function AudioWorkspace() {
   const animationRef = useRef<number | null>(null)
   const startTime = useRef<number>(0)
   const pausedAt = useRef<number>(0)
+  const trackContainerRef = useRef<HTMLDivElement>(null)
+  const loopScheduledRef = useRef<boolean>(false)
 
-  // Restart playback when BPM changes - using a ref to avoid circular dependencies
   const bpmRef = useRef(bpm);
   
   useEffect(() => {
@@ -62,7 +69,6 @@ export function AudioWorkspace() {
     }
   }, [bpm, isPlaying]);
 
-  // Initialize audio context
   useEffect(() => {
     if (typeof window !== "undefined" && !audioContext.current) {
       audioContext.current = new (window.AudioContext || (window as any).webkitAudioContext)()
@@ -75,25 +81,22 @@ export function AudioWorkspace() {
     }
   }, [])
 
-  // Update duration based on tracks, accounting for positions
   useEffect(() => {
     if (tracks.length === 0) {
-      setDuration(60) // Default 60 seconds when no tracks
+      setDuration(60)
       return
     }
 
-    // Calculate max duration including track positions
     const maxDuration = Math.max(
       ...tracks
         .filter((track) => track.audioBuffer)
         .map((track) => (track.position || 0) + (track.audioBuffer?.duration || 0)),
-      60 // Minimum 60 seconds
+      60
     )
 
     setDuration(maxDuration)
   }, [tracks])
 
-  // Animation loop for playback position
   useEffect(() => {
     if (isPlaying) {
       const updatePlayhead = () => {
@@ -102,20 +105,24 @@ export function AudioWorkspace() {
           const newCurrentTime = pausedAt.current + elapsed;
           setCurrentTime(newCurrentTime)
 
-          // Check if any tracks need to start playing because we've reached their position
+          // Calculate the effective loop end based on content
+          const loopEndPoint = getLoopEndPoint();
+          
+          // Define a small buffer time before loop end to prepare for smooth transition
+          const loopPrepBuffer = 0.1; // 100ms preparation time
+          
+          // Check if we need to schedule tracks that should start between now and the next update
           tracks.forEach((track) => {
             const trackPosition = track.position || 0;
             
-            // If the track should start now and isn't already playing
             if (track.audioBuffer && 
                 trackPosition > pausedAt.current && 
                 trackPosition <= newCurrentTime && 
                 !sourceNodes.current.has(track.id)) {
               
-              // Create and start a new source for this track
               const source = audioContext.current!.createBufferSource();
               source.buffer = track.audioBuffer;
-              source.playbackRate.value = bpm / 140;
+              source.playbackRate.value = 1.0;
               
               const gainNode = audioContext.current!.createGain();
               gainNode.gain.value = track.muted ? 0 : track.volume;
@@ -123,43 +130,59 @@ export function AudioWorkspace() {
               source.connect(gainNode);
               gainNode.connect(audioContext.current!.destination);
               
-              // Start from the beginning of the track
               source.start(0, 0);
               
-              // Store the nodes
               sourceNodes.current.set(track.id, source);
               gainNodes.current.set(track.id, gainNode);
             }
           });
 
-          if (newCurrentTime >= duration) {
-            if (isLooping) {
-              // If looping is enabled, restart playback
-              pausedAt.current = 0;
-              stopPlayback(false);
-              startPlayback();
-            } else {
-              stopPlayback();
+          // If we're approaching the loop end point, prepare for smooth looping
+          if (isLooping && newCurrentTime >= loopEndPoint - loopPrepBuffer && newCurrentTime < loopEndPoint) {
+            // Only schedule the loop once when we enter the buffer zone
+            if (!loopScheduledRef.current) {
+              loopScheduledRef.current = true;
+              
+              // Schedule the new playback precisely at the loop point
+              const timeToLoopPoint = loopEndPoint - newCurrentTime;
+              const scheduleTime = audioContext.current.currentTime + timeToLoopPoint;
+              
+              // Schedule all sources for the loop start
+              scheduleLoopStart(scheduleTime);
             }
-            return;
+          }
+
+          // If we've passed the loop end point, reset UI state
+          if (newCurrentTime >= loopEndPoint) {
+            if (isLooping) {
+              // Reset visual playhead without disrupting audio
+              pausedAt.current = 0;
+              setCurrentTime(0);
+              startTime.current = audioContext.current.currentTime - (newCurrentTime - loopEndPoint);
+            } else {
+              stopPlayback(true);
+              return;
+            }
           }
         }
         animationRef.current = requestAnimationFrame(updatePlayhead)
       }
 
+      loopScheduledRef.current = false;
       animationRef.current = requestAnimationFrame(updatePlayhead)
     } else if (animationRef.current) {
       cancelAnimationFrame(animationRef.current)
+      loopScheduledRef.current = false;
     }
 
     return () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current)
       }
+      loopScheduledRef.current = false;
     }
   }, [isPlaying, duration, isLooping, bpm, tracks])
 
-  // Update the handleFileUpload function to accept a trackId parameter
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>, trackId?: string) => {
     if (!event.target.files || !event.target.files.length || !audioContext.current) return
 
@@ -167,13 +190,11 @@ export function AudioWorkspace() {
     const arrayBuffer = await file.arrayBuffer()
     const audioBuffer = await audioContext.current.decodeAudioData(arrayBuffer)
 
-    // If trackId is provided, update that track instead of creating a new one
     if (trackId) {
       setTracks((prev) =>
         prev.map((track) => (track.id === trackId ? { ...track, name: file.name.split(".")[0], audioBuffer } : track)),
       )
     } else {
-      // Create a new track if no trackId is provided
       const newTrack: Track = {
         id: crypto.randomUUID(),
         name: file.name.split(".")[0],
@@ -191,27 +212,22 @@ export function AudioWorkspace() {
   const startPlayback = () => {
     if (!audioContext.current || tracks.length === 0) return
 
-    // Resume audio context if suspended
     if (audioContext.current.state === "suspended") {
       audioContext.current.resume()
     }
 
-    // Stop any existing playback
     stopPlayback(false)
 
-    // Create new source nodes for each track
     tracks.forEach((track) => {
       if (!track.audioBuffer || !audioContext.current) return
 
-      // Skip track if its position is greater than the current time
       const trackPosition = track.position || 0;
       if (trackPosition > pausedAt.current) {
-        return; // Track not yet reached in the timeline
+        return;
       }
 
       const source = audioContext.current.createBufferSource()
       source.buffer = track.audioBuffer
-      // Remove playback rate adjustment
       source.playbackRate.value = 1.0;
 
       const gainNode = audioContext.current.createGain()
@@ -223,7 +239,6 @@ export function AudioWorkspace() {
       sourceNodes.current.set(track.id, source)
       gainNodes.current.set(track.id, gainNode)
 
-      // Calculate offset within the audio file
       const offsetInTrack = Math.max(0, pausedAt.current - trackPosition);
       source.start(0, offsetInTrack);
     })
@@ -233,7 +248,6 @@ export function AudioWorkspace() {
   }
 
   const stopPlayback = (resetPosition = true) => {
-    // Stop all source nodes
     sourceNodes.current.forEach((source) => {
       try {
         source.stop()
@@ -288,7 +302,6 @@ export function AudioWorkspace() {
   const handleTrackUpdate = (id: string, updates: Partial<Track>) => {
     setTracks((prev) => prev.map((track) => (track.id === id ? { ...track, ...updates } : track)))
 
-    // Update gain node if volume or mute changed
     if (isPlaying && (updates.volume !== undefined || updates.muted !== undefined)) {
       const gainNode = gainNodes.current.get(id)
       const track = tracks.find((t) => t.id === id)
@@ -325,24 +338,19 @@ export function AudioWorkspace() {
     return `${mins}:${secs.toString().padStart(2, "0")}`
   }
 
-  // Add this helper function to render a basic waveform
   const renderWaveform = (audioBuffer: AudioBuffer, color: string) => {
     if (!audioBuffer) return null;
     
-    // Get the first channel data (mono or left channel)
     const data = audioBuffer.getChannelData(0);
     
-    // We'll sample the data to create a simplified waveform
-    const samples = 100; // Number of samples to display
+    const samples = 100;
     const blockSize = Math.floor(data.length / samples);
     const waveformData = [];
     
-    // Calculate peak values for each block
     for (let i = 0; i < samples; i++) {
       const start = i * blockSize;
       let peak = 0;
       
-      // Find the peak in this block
       for (let j = 0; j < blockSize; j++) {
         const value = Math.abs(data[start + j] || 0);
         if (value > peak) {
@@ -353,7 +361,6 @@ export function AudioWorkspace() {
       waveformData.push(peak);
     }
     
-    // Return the waveform SVG
     return (
       <svg width="100%" height="100%" preserveAspectRatio="none" viewBox={`0 0 ${samples} 100`}>
         {waveformData.map((peak, i) => (
@@ -371,9 +378,169 @@ export function AudioWorkspace() {
     );
   };
 
+  const getBeatDuration = () => {
+    return 60 / bpm;
+  }
+  
+  const getSnappedPosition = (position: number) => {
+    const beatDuration = getBeatDuration();
+    return Math.round(position / beatDuration) * beatDuration;
+  }
+
+  const handleDragStart = (e: React.MouseEvent, trackId: string) => {
+    e.preventDefault();
+    
+    const track = tracks.find(t => t.id === trackId);
+    if (!track || !track.audioBuffer) return;
+    
+    const containerRect = trackContainerRef.current?.getBoundingClientRect();
+    if (!containerRect) return;
+    
+    const elementRect = (e.target as HTMLElement).getBoundingClientRect();
+    const offsetX = e.clientX - elementRect.left;
+    
+    const startX = e.clientX;
+    const startPosition = track.position || 0;
+    
+    setDragInfo({
+      trackId,
+      startX,
+      startPosition,
+      currentPosition: startPosition,
+    });
+    
+    document.addEventListener('mousemove', handleDragMove);
+    document.addEventListener('mouseup', handleDragEnd);
+  };
+  
+  const handleDragMove = (e: MouseEvent) => {
+    if (!dragInfo || !trackContainerRef.current) return;
+    
+    e.preventDefault();
+    
+    const containerRect = trackContainerRef.current.getBoundingClientRect();
+    
+    const deltaX = e.clientX - dragInfo.startX;
+    const deltaTime = deltaX / zoom;
+    
+    const rawPosition = Math.max(0, dragInfo.startPosition + deltaTime);
+    
+    const snappedPosition = getSnappedPosition(rawPosition);
+    
+    setDragInfo({
+      ...dragInfo,
+      currentPosition: snappedPosition
+    });
+    
+    setTracks(prev => prev.map(track => 
+      track.id === dragInfo.trackId
+        ? { ...track, position: snappedPosition }
+        : track
+    ));
+  };
+  
+  const handleDragEnd = (e: MouseEvent) => {
+    if (!dragInfo) return;
+    
+    if (trackContainerRef.current) {
+      const deltaX = e.clientX - dragInfo.startX;
+      const deltaTime = deltaX / zoom;
+      
+      const rawPosition = Math.max(0, dragInfo.startPosition + deltaTime);
+      
+      const snappedPosition = getSnappedPosition(rawPosition);
+      
+      setTracks(prev => prev.map(track => 
+        track.id === dragInfo.trackId
+          ? { ...track, position: snappedPosition }
+          : track
+      ));
+    }
+    
+    setDragInfo(null);
+    
+    document.removeEventListener('mousemove', handleDragMove);
+    document.removeEventListener('mouseup', handleDragEnd);
+  };
+  
+  useEffect(() => {
+    return () => {
+      document.removeEventListener('mousemove', handleDragMove)
+      document.removeEventListener('mouseup', handleDragEnd)
+    }
+  }, [])
+
+  // Add a function to calculate the effective loop end point
+  const getLoopEndPoint = () => {
+    if (tracks.length === 0) return duration;
+    
+    // Find the endpoint of the last clip (position + duration)
+    const lastEndPoint = Math.max(
+      ...tracks
+        .filter(track => track.audioBuffer)
+        .map(track => (track.position || 0) + track.audioBuffer!.duration),
+      0 // Minimum value
+    );
+    
+    // If there are no clips with audio, return the full duration
+    return lastEndPoint > 0 ? lastEndPoint : duration;
+  };
+
+  // Add a function to schedule sources for loop start
+  const scheduleLoopStart = (exactStartTime: number) => {
+    if (!audioContext.current) return;
+    
+    // Stop existing source nodes after loop transition is complete
+    const existingSourceIds = Array.from(sourceNodes.current.keys());
+    
+    // Schedule new sources to start exactly at the loop point
+    tracks.forEach((track) => {
+      if (!track.audioBuffer || !audioContext.current) return;
+
+      // Only schedule tracks that should play at start position
+      const trackPosition = track.position || 0;
+      if (trackPosition > 0) return;
+
+      // Create and schedule a new source
+      const newSource = audioContext.current.createBufferSource();
+      newSource.buffer = track.audioBuffer;
+      newSource.playbackRate.value = 1.0;
+      
+      const gainNode = audioContext.current.createGain();
+      gainNode.gain.value = track.muted ? 0 : track.volume;
+      
+      newSource.connect(gainNode);
+      gainNode.connect(audioContext.current.destination);
+      
+      // Use absolute scheduling for precise timing
+      newSource.start(exactStartTime, 0);
+      
+      // Add a unique loop ID to distinguish the new sources
+      const loopSourceId = `loop_${track.id}`;
+      sourceNodes.current.set(loopSourceId, newSource);
+      gainNodes.current.set(loopSourceId, gainNode);
+    });
+    
+    // Schedule cleanup of old sources shortly after new ones start
+    setTimeout(() => {
+      existingSourceIds.forEach(id => {
+        try {
+          const source = sourceNodes.current.get(id);
+          if (source) {
+            source.stop();
+            sourceNodes.current.delete(id);
+          }
+          
+          gainNodes.current.delete(id);
+        } catch (e) {
+          // Source might already be stopped
+        }
+      });
+    }, 100); // Cleanup 100ms after loop - this creates a brief crossfade
+  }
+
   return (
     <div className="flex flex-col w-full h-full bg-background border rounded-lg shadow-lg overflow-hidden">
-      {/* Transport Controls */}
       <div className="flex items-center gap-2 p-4 border-b bg-muted/30">
         <Button
           variant="outline"
@@ -404,7 +571,6 @@ export function AudioWorkspace() {
         </div>
       </div>
 
-      {/* BPM and Loop Controls */}
       <div className="flex items-center gap-4 p-2 border-b bg-muted/20">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">BPM:</span>
@@ -448,18 +614,13 @@ export function AudioWorkspace() {
         </div>
       </div>
 
-      {/* Tracks Container */}
       <div className="flex flex-col flex-1 overflow-auto relative">
-        {/* Timeline */}
         <div className="flex h-8 border-b bg-muted/20">
-          {/* Fixed track control width area - should not have any grid lines */}
           <div className="w-48 h-full border-r bg-muted/30 flex items-center justify-center">
             <span className="text-xs font-medium text-muted-foreground">BARS</span>
           </div>
           
-          {/* Timeline with grid - only in the content area */}
           <div className="relative flex-1 overflow-hidden">
-            {/* Timeline playhead indicator */}
             <div className="absolute top-0 bottom-0 w-0.5 bg-primary z-10 pointer-events-none"
               style={{ 
                 left: `${currentTime * zoom}px`,
@@ -474,12 +635,9 @@ export function AudioWorkspace() {
                 minWidth: "100%",
               }}
             >
-              {/* Render grid based on BPM - simplified to only show bar numbers */}
               {Array.from({ length: Math.floor(duration * (bpm / 60) / 4) + 2 }).map((_, i) => {
-                // Calculate actual seconds position for each bar (4 beats)
                 const barTimeInSeconds = (i * 4 * 60) / bpm;
                 
-                // Check if this bar is the current bar
                 const currentBeat = Math.floor((currentTime * bpm / 60));
                 const currentBar = Math.floor(currentBeat / 4);
                 const isCurrentBar = i === currentBar;
@@ -495,7 +653,6 @@ export function AudioWorkspace() {
                       width: `${(4 * 60 / bpm) * zoom}px`
                     }}
                   >
-                    {/* Bar number */}
                     <div className={cn(
                       "absolute top-0 left-0 h-full flex items-center",
                       isCurrentBar && "text-green-500 font-bold"
@@ -503,7 +660,6 @@ export function AudioWorkspace() {
                       <span className="text-xs pl-1">{i+1}</span>
                     </div>
                     
-                    {/* Bar boundary line */}
                     <div 
                       className={cn(
                         "absolute top-0 bottom-0 left-0 border-l",
@@ -511,7 +667,6 @@ export function AudioWorkspace() {
                       )}
                     />
                     
-                    {/* Beat lines within bar - 4 beats per bar */}
                     {[1, 2, 3].map((beat) => (
                       <div 
                         key={beat}
@@ -528,12 +683,9 @@ export function AudioWorkspace() {
           </div>
         </div>
 
-        {/* Tracks */}
-        <div className="flex-1 overflow-auto relative">
+        <div className="flex-1 overflow-hidden relative">
           <div className="flex">
-            {/* Sidebar for track controls and Add Track button - no grid here */}
             <div className="w-48 flex flex-col border-r bg-muted/20">
-              {/* Track controls */}
               {tracks.map((track) => (
                 <div key={track.id} className="border-b py-2 px-2">
                   <div className="flex items-center gap-2 mb-2">
@@ -601,7 +753,6 @@ export function AudioWorkspace() {
                 </div>
               ))}
               
-              {/* Add Track button */}
               <div className="p-2 sticky bottom-0">
                 <Button 
                   variant="outline" 
@@ -615,9 +766,7 @@ export function AudioWorkspace() {
               </div>
             </div>
             
-            {/* Track content area - with grid overlay */}
             <div className="flex-1 overflow-hidden relative">
-              {/* Global playhead positioned in tracks content area */}
               <div className="absolute top-0 bottom-0 w-0.5 bg-primary z-20 pointer-events-none"
                 style={{ 
                   left: `${currentTime * zoom}px`,
@@ -625,7 +774,6 @@ export function AudioWorkspace() {
                 }} 
               />
             
-              {/* Grid lines in track area - to ensure they align with tracks */}
               <div 
                 className="absolute top-0 bottom-0 left-0 right-0 pointer-events-none z-0"
                 style={{
@@ -633,13 +781,11 @@ export function AudioWorkspace() {
                   minWidth: "100%",
                 }}
               >
-                {/* Bar lines */}
                 {Array.from({ length: Math.floor(duration * (bpm / 60) / 4) + 2 }).map((_, i) => {
                   const barTimeInSeconds = (i * 4 * 60) / bpm;
                   
                   return (
                     <div key={`bar-${i}`}>
-                      {/* Bar line */}
                       <div 
                         className="absolute top-0 bottom-0 border-l border-muted-foreground/30"
                         style={{ 
@@ -648,7 +794,6 @@ export function AudioWorkspace() {
                         }}
                       />
                       
-                      {/* Beat lines within bar */}
                       {[1, 2, 3].map((beat) => (
                         <div 
                           key={`beat-${i}-${beat}`}
@@ -664,8 +809,8 @@ export function AudioWorkspace() {
                 })}
               </div>
               
-              {/* Actual audio content only */}
               <div
+                ref={trackContainerRef}
                 className="relative"
                 style={{
                   width: `${Math.max(duration * zoom, 100)}px`,
@@ -680,23 +825,30 @@ export function AudioWorkspace() {
                     {track.audioBuffer && (
                       <div 
                         className={cn(
-                          "absolute top-4 bottom-4 rounded",
+                          "absolute top-4 bottom-4 rounded transition-shadow",
                           track.color,
-                          (track.muted && !track.solo) && "opacity-50"
+                          (track.muted && !track.solo) && "opacity-50",
+                          dragInfo?.trackId === track.id ? "cursor-grabbing shadow-lg z-10 ring-2 ring-white/50" : "cursor-grab hover:brightness-110"
                         )}
                         style={{
                           left: `${(track.position || 0) * zoom}px`,
                           width: `${track.audioBuffer.duration * zoom}px`,
                         }}
+                        onMouseDown={(e) => handleDragStart(e, track.id)}
                       >
-                        {/* Display audio file name and duration */}
-                        <div className="absolute inset-0 flex items-center justify-between px-2 text-xs text-white">
+                        <div className="absolute inset-x-0 top-0 h-3 bg-white/20 hover:bg-white/40 rounded-t cursor-move flex items-center justify-center">
+                          <div className="w-8 h-1 bg-white/60 rounded-full"></div>
+                        </div>
+                        
+                        <div className="absolute -left-0.5 top-0 bottom-0 w-0.5 bg-white/70"></div>
+                        <div className="absolute -right-0.5 top-0 bottom-0 w-0.5 bg-white/70"></div>
+                        
+                        <div className="absolute inset-0 flex items-center justify-between px-2 text-xs text-white select-none">
                           <span>{track.name}</span>
                           <span>{formatTime(track.audioBuffer.duration)}s</span>
                         </div>
                         
-                        {/* Display a basic waveform visualization */}
-                        <div className="absolute inset-0 px-1 flex items-center justify-center overflow-hidden">
+                        <div className="absolute inset-0 px-1 flex items-center justify-center overflow-hidden pointer-events-none">
                           {renderWaveform(track.audioBuffer, track.color)}
                         </div>
                       </div>
