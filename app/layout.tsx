@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import './globals.css'
+import '@/app/globals.css'
 
 export const metadata: Metadata = {
   title: 'v0 App',
@@ -9,12 +9,12 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode
-}>) {
+}) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className="overflow-hidden">{children}</body>
     </html>
   )
 }
