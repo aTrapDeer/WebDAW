@@ -5,31 +5,14 @@ import type React from "react"
 import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
-import { Play, Square, Plus, Loader2, FolderPlus, FileText, RotateCcw, Smartphone, Volume2, VolumeX } from "lucide-react"
+import { Play, Square, Plus, Loader2, FolderPlus, FileText, RotateCcw, Smartphone, VolumeX, X } from "lucide-react"
 import { AudioTrack } from "@/components/audio-track"
 import { cn } from "@/lib/utils"
-
-// Add a head component to ensure proper viewport settings
-const AudioAppHead = () => {
-  useEffect(() => {
-    // Ensure proper viewport meta tag exists
-    let viewportMeta = document.querySelector('meta[name="viewport"]') as HTMLMetaElement;
-    if (!viewportMeta) {
-      viewportMeta = document.createElement('meta');
-      viewportMeta.setAttribute('name', 'viewport');
-      document.head.appendChild(viewportMeta);
-    }
-    viewportMeta.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no');
-  }, []);
-
-  return null;
-};
 
 // Mobile device detection and orientation lock
 function useMobileOrientation() {
   const [isPortrait, setIsPortrait] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [isIOS, setIsIOS] = useState(false);
 
   useEffect(() => {
     // Check if device is mobile
@@ -37,12 +20,6 @@ function useMobileOrientation() {
       const userAgent = navigator.userAgent.toLowerCase();
       setIsMobile(
         /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent)
-      );
-      
-      // Check if iOS - fixed to avoid the MSStream property error
-      setIsIOS(
-        /iphone|ipad|ipod/i.test(userAgent) && 
-        !(window as any).MSStream // Use type assertion instead
       );
     };
 
@@ -58,7 +35,7 @@ function useMobileOrientation() {
     return () => window.removeEventListener('resize', checkOrientation);
   }, []);
 
-  return { isMobile, isPortrait, isIOS };
+  return { isMobile, isPortrait };
 }
 
 interface Track {
@@ -252,13 +229,14 @@ export function AudioWorkspace() {
     currentPosition?: number;
   } | null>(null)
   
-  // Add audio-related state for iOS
-  const [audioInitialized, setAudioInitialized] = useState(false);
-  const [showAudioPrompt, setShowAudioPrompt] = useState(false);
-  
   // Add mobile-specific state
-  const { isMobile, isPortrait, isIOS } = useMobileOrientation();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const { isMobile, isPortrait } = useMobileOrientation();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true); // Default to collapsed on mobile
+  
+  // Add audio state detection
+  const [audioContextState, setAudioContextState] = useState<AudioContextState>("suspended");
+  const [showAudioWarning, setShowAudioWarning] = useState(false);
+  const audioWarningDismissed = useRef(false);
 
   const audioContext = useRef<AudioContext | null>(null)
   const sourceNodes = useRef<Map<string, AudioBufferSourceNode>>(new Map())
@@ -299,76 +277,18 @@ export function AudioWorkspace() {
     }
   }, [bpm, isPlaying]);
 
-  // Modify the useEffect for audio initialization to make it more robust for mobile
   useEffect(() => {
     if (typeof window !== "undefined" && !audioContext.current) {
-      try {
-        // Create audio context with proper mobile handling
-        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-        audioContext.current = new AudioContextClass({ latencyHint: "playback" });
-        
-        // Log audio context state
-        console.log('Audio context created with state:', audioContext.current.state);
-        
-        // Check if context is suspended (likely on iOS/mobile)
-        if (audioContext.current.state === "suspended") {
-          setAudioInitialized(false);
-          
-          // For iOS devices, show audio prompt after a brief delay
-          if (isIOS) {
-            setTimeout(() => {
-              setShowAudioPrompt(true);
-            }, 500);
-          }
-        } else {
-          setAudioInitialized(true);
-        }
-        
-        // Add listener for state changes
-        audioContext.current.onstatechange = () => {
-          console.log('Audio context state changed to:', audioContext.current?.state);
-          if (audioContext.current?.state === 'running') {
-            setAudioInitialized(true);
-            setShowAudioPrompt(false);
-          }
-        };
-      } catch (error) {
-        console.error('Error initializing audio context:', error);
-      }
+      audioContext.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+      // No longer auto-load project on mount - we'll let the user select a project
     }
 
     return () => {
       if (audioContext.current) {
-        audioContext.current.close();
+        audioContext.current.close()
       }
-    };
-  }, [isIOS]);
-
-  // Enhance the initializeAudio function to be more robust for mobile
-  const initializeAudio = () => {
-    console.log('Attempting to initialize audio...');
-    if (!audioContext.current) return;
-    
-    try {
-      // Create and play a silent buffer to unlock audio
-      const buffer = audioContext.current.createBuffer(1, 1, 22050);
-      const source = audioContext.current.createBufferSource();
-      source.buffer = buffer;
-      source.connect(audioContext.current.destination);
-      source.start(0);
-      
-      // Resume audio context
-      audioContext.current.resume().then(() => {
-        console.log('Audio context resumed successfully');
-        setAudioInitialized(true);
-        setShowAudioPrompt(false);
-      }).catch(err => {
-        console.error('Failed to resume audio context:', err);
-      });
-    } catch (error) {
-      console.error('Error in initializeAudio:', error);
     }
-  };
+  }, [])
 
   useEffect(() => {
     if (tracks.length === 0) {
@@ -513,78 +433,50 @@ export function AudioWorkspace() {
     }
   }
 
-  // Improve the startPlayback function to handle mobile audio better
   const startPlayback = () => {
-    console.log('Start playback called, audio initialized:', audioInitialized);
-    
-    if (!audioContext.current || tracks.length === 0) {
-      console.log('No audio context or tracks, cannot start playback');
-      return;
-    }
+    if (!audioContext.current || tracks.length === 0) return
 
-    // For all devices, ensure audio is initialized
     if (audioContext.current.state === "suspended") {
-      console.log('Audio context suspended, attempting to resume...');
-      
-      initializeAudio(); // Always call initialize first
-      
-      audioContext.current.resume().then(() => {
-        console.log('Audio context resumed, starting playback');
-        setAudioInitialized(true);
-        setShowAudioPrompt(false);
-        // Continue with playback after resuming
-        setTimeout(() => {
-          startActualPlayback();
-        }, 100); // Small delay to ensure context is fully resumed
-      }).catch(err => {
-        console.error('Failed to resume audio context:', err);
-      });
-    } else {
-      console.log('Audio context already running, starting playback directly');
-      startActualPlayback();
+      audioContext.current.resume()
     }
-  };
 
-  const startActualPlayback = () => {
-    if (!audioContext.current || tracks.length === 0) return;
-    
-    stopPlayback(false);
+    stopPlayback(false)
 
     tracks.forEach((track) => {
-      if (!track.audioBuffer || !audioContext.current) return;
+      if (!track.audioBuffer || !audioContext.current) return
 
       const trackPosition = track.position || 0;
       if (trackPosition > pausedAt.current) {
         return;
       }
 
-      const source = audioContext.current.createBufferSource();
-      source.buffer = track.audioBuffer;
+      const source = audioContext.current.createBufferSource()
+      source.buffer = track.audioBuffer
       source.playbackRate.value = 1.0;
 
-      const gainNode = audioContext.current.createGain();
-      gainNode.gain.value = track.muted ? 0 : track.volume;
+      const gainNode = audioContext.current.createGain()
+      gainNode.gain.value = track.muted ? 0 : track.volume
       
       // Create analyzer node for RMS calculation
       const analyzerNode = audioContext.current.createAnalyser();
       analyzerNode.fftSize = 256;
       analyzerNode.smoothingTimeConstant = 0.8;
       
-      source.connect(gainNode);
-      gainNode.connect(analyzerNode);
-      analyzerNode.connect(audioContext.current.destination);
+      source.connect(gainNode)
+      gainNode.connect(analyzerNode)
+      analyzerNode.connect(audioContext.current.destination)
 
-      sourceNodes.current.set(track.id, source);
-      gainNodes.current.set(track.id, gainNode);
-      analyzerNodes.current.set(track.id, analyzerNode);
+      sourceNodes.current.set(track.id, source)
+      gainNodes.current.set(track.id, gainNode)
+      analyzerNodes.current.set(track.id, analyzerNode)
 
       const offsetInTrack = Math.max(0, pausedAt.current - trackPosition);
       source.start(0, offsetInTrack);
-    });
+    })
 
-    startTime.current = audioContext.current.currentTime;
-    setIsPlaying(true);
-  };
+    startTime.current = audioContext.current.currentTime
+    setIsPlaying(true)
+  }
 
   const stopPlayback = (resetPosition = true) => {
     sourceNodes.current.forEach((source) => {
@@ -611,24 +503,13 @@ export function AudioWorkspace() {
     setIsPlaying(false)
   }
 
-  // Modify the handlePlayPause to work better for all mobile devices
   const handlePlayPause = () => {
     if (isPlaying) {
-      stopPlayback(false);
+      stopPlayback(false)
     } else {
-      // Always try to initialize audio on play for any mobile device
-      if (!audioInitialized || (audioContext.current && audioContext.current.state === "suspended")) {
-        console.log('Initializing audio before playing');
-        initializeAudio();
-        // Allow some time for initialization to complete
-        setTimeout(() => {
-          startPlayback();
-        }, 150);
-      } else {
-        startPlayback();
-      }
+      startPlayback()
     }
-  };
+  }
 
   const handleStop = () => {
     // Cancel all animation frames to stop any ongoing animations
@@ -1227,354 +1108,275 @@ export function AudioWorkspace() {
     setSidebarCollapsed(!sidebarCollapsed);
   };
 
-  return (
-    <>
-      <AudioAppHead />
-      <div className="fixed inset-0 bg-zinc-950 text-white font-mono overflow-hidden">
-        {/* Audio prompt for iOS devices */}
-        {showAudioPrompt && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-zinc-900 border-2 border-cyan-500 rounded-lg p-5 max-w-xs w-full shadow-xl animate-pulse">
-              <div className="flex justify-center mb-4">
-                <Volume2 className="h-14 w-14 text-cyan-400" />
-              </div>
-              <h3 className="text-xl text-center font-bold text-white mb-3">Enable Audio</h3>
-              <p className="text-sm text-zinc-300 text-center mb-5">
-                Tap the button below to enable audio playback on your mobile device.
-              </p>
-              <Button 
-                onClick={initializeAudio} 
-                className="w-full h-12 bg-cyan-600 hover:bg-cyan-700 text-white text-lg font-medium"
-              >
-                Enable Audio
-              </Button>
-            </div>
-          </div>
-        )}
+  // Add effect to monitor audio context state
+  useEffect(() => {
+    if (audioContext.current) {
+      const checkAudioState = () => {
+        setAudioContextState(audioContext.current!.state);
+        
+        // Show audio warning if suspended and not dismissed
+        if (audioContext.current!.state === "suspended" && !audioWarningDismissed.current) {
+          setShowAudioWarning(true);
+        } else {
+          setShowAudioWarning(false);
+        }
+      };
       
-        {/* Portrait mode warning for mobile devices */}
-        {isMobile && isPortrait && (
-          <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center p-8 text-center">
-            <Smartphone className="h-16 w-16 text-cyan-400 mb-4 animate-pulse" />
-            <h2 className="text-cyan-300 text-2xl font-bold mb-2">Please Rotate Your Device</h2>
-            <p className="text-zinc-300 mb-6">This application works best in landscape orientation.</p>
-            <RotateCcw className="h-10 w-10 text-white animate-spin" />
-          </div>
-        )}
+      // Check initial state
+      checkAudioState();
+      
+      // Setup event listeners for state changes
+      audioContext.current.addEventListener('statechange', checkAudioState);
+      
+      return () => {
+        if (audioContext.current) {
+          audioContext.current.removeEventListener('statechange', checkAudioState);
+        }
+      };
+    }
+  }, []);
+  
+  // Function to dismiss audio warning
+  const dismissAudioWarning = () => {
+    setShowAudioWarning(false);
+    audioWarningDismissed.current = true;
+  };
 
-        {/* Project Selector */}
-        <ProjectSelector
-          isVisible={showProjectSelector}
-          onNewProject={handleNewProject}
-          onLoadProject={handleLoadProject}
-          onClose={() => setShowProjectSelector(false)}
-        />
-        
-        {/* Loading overlay */}
-        {isLoading && (
-          <div className="absolute inset-0 bg-zinc-950/80 flex items-center justify-center z-50 backdrop-blur-sm">
-            <div className="flex flex-col items-center gap-4">
-              <Loader2 className="h-12 w-12 text-cyan-500 animate-spin" />
-              <p className="text-cyan-300 font-medium">Loading project...</p>
+  // Attempt to resume audio context
+  const resumeAudioContext = () => {
+    if (audioContext.current && audioContext.current.state === "suspended") {
+      audioContext.current.resume().then(() => {
+        setShowAudioWarning(false);
+      }).catch(err => {
+        console.error("Failed to resume audio context:", err);
+      });
+    }
+  };
+
+  return (
+    <div className="w-full h-screen flex flex-col bg-zinc-950 text-white font-mono relative overflow-hidden">
+      {/* Portrait mode warning for mobile devices */}
+      {isMobile && isPortrait && (
+        <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center p-4 text-center">
+          <Smartphone className="h-16 w-16 text-cyan-400 mb-3 animate-pulse" />
+          <h2 className="text-cyan-300 text-xl font-bold mb-2">Please Rotate Your Device</h2>
+          <p className="text-zinc-300 mb-4">This application works best in landscape orientation.</p>
+          <RotateCcw className="h-10 w-10 text-white animate-spin" />
+        </div>
+      )}
+
+      {/* Audio Warning */}
+      {showAudioWarning && (
+        <div className="fixed top-0 inset-x-0 bg-red-900/90 z-40 p-2 flex items-center justify-between text-white shadow-lg">
+          <div className="flex items-center gap-2">
+            <VolumeX className="h-5 w-5 text-red-300" />
+            <div className="text-sm">
+              <span className="font-medium">Sound is muted.</span> 
+              <span className="text-red-200"> Tap to unmute your device.</span>
             </div>
           </div>
-        )}
-        
-        <div className="flex flex-col w-full h-full max-h-full bg-black overflow-hidden">
-          {/* Header with title and neon effect - simplified for mobile */}
-          <div className={cn(
-            "bg-black py-2 px-3 border-b border-cyan-500/30 flex justify-between items-center",
-            isMobile && "py-1 px-1"
-          )}>
-            <div className="flex items-center">
-              {isMobile ? (
-                <>
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    onClick={toggleSidebar}
-                    className="mr-1 h-8 w-8 text-cyan-400"
-                  >
-                    {sidebarCollapsed ? "≡" : "×"}
-                  </Button>
-                  <h1 className="text-base font-bold text-white tracking-tight flex items-center truncate">
-                    <span className="text-cyan-400 mr-1 text-lg">⬤</span>
-                    <span className="bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">MUSIC</span>
-                  </h1>
-                </>
-              ) : (
-                <h1 className="text-xl font-bold text-white tracking-tight flex items-center">
-                  <span className="text-cyan-400 mr-2 text-2xl">⬤</span>
-                  <span className="bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">MUSIC WORKSTATION</span>
-                </h1>
-              )}
-              {currentProject && !isMobile && (
-                <span className="ml-4 px-3 py-1 bg-zinc-800 rounded-md text-sm text-cyan-200">{currentProject}</span>
-              )}
-            </div>
-            <div className="flex items-center gap-1">
-              {!audioInitialized && isIOS && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={initializeAudio}
-                  className="text-amber-400 h-8 w-8"
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            className="h-6 w-6 text-red-200 hover:bg-red-800/50" 
+            onClick={dismissAudioWarning}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+
+      {/* Project Selector */}
+      <ProjectSelector
+        isVisible={showProjectSelector}
+        onNewProject={handleNewProject}
+        onLoadProject={handleLoadProject}
+        onClose={() => setShowProjectSelector(false)}
+      />
+      
+      {/* Loading overlay */}
+      {isLoading && (
+        <div className="absolute inset-0 bg-zinc-950/80 flex items-center justify-center z-50 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4">
+            <Loader2 className="h-12 w-12 text-cyan-500 animate-spin" />
+            <p className="text-cyan-300 font-medium">Loading project...</p>
+          </div>
+        </div>
+      )}
+      
+      <div className={cn(
+        "flex flex-col w-full h-screen max-h-screen bg-black overflow-hidden",
+        isMobile && "max-w-[100vw]"
+      )}>
+        {/* Header with title and neon effect - simplified for mobile */}
+        <div className={cn(
+          "bg-black border-b border-cyan-500/30 flex justify-between items-center",
+          isMobile ? "py-0.5 px-1" : "py-2 px-3"
+        )}>
+          <div className="flex items-center">
+            {isMobile ? (
+              <>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  onClick={toggleSidebar}
+                  className="mr-1 h-7 w-7 p-0 text-cyan-400"
                 >
-                  <VolumeX className="h-4 w-4" />
+                  {sidebarCollapsed ? "≡" : "×"}
                 </Button>
+                <h1 className="text-sm font-bold text-white tracking-tight flex items-center truncate">
+                  <span className="text-cyan-400 mr-1 text-base">⬤</span>
+                  <span className="bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">MUSIC</span>
+                </h1>
+              </>
+            ) : (
+              <h1 className="text-xl font-bold text-white tracking-tight flex items-center">
+                <span className="text-cyan-400 mr-2 text-2xl">⬤</span>
+                <span className="bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">MUSIC WORKSTATION</span>
+              </h1>
+            )}
+            {currentProject && !isMobile && (
+              <span className="ml-4 px-3 py-1 bg-zinc-800 rounded-md text-sm text-cyan-200">{currentProject}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size={isMobile ? "sm" : "default"}
+              onClick={toggleProjectSelector}
+              className={cn(
+                "bg-zinc-800 text-cyan-300 border-cyan-700/50 hover:bg-zinc-700",
+                isMobile && "h-7 text-xs px-1.5 py-0"
               )}
-              <Button
-                variant="outline"
-                size={isMobile ? "sm" : "default"}
-                onClick={toggleProjectSelector}
+            >
+              <FolderPlus className={cn("mr-1", isMobile ? "h-3 w-3" : "h-4 w-4")} />
+              {isMobile ? "Proj" : "Projects"}
+            </Button>
+            <div className={cn("flex items-center gap-1", isMobile && "scale-90")}>
+              <span className="text-xs text-zinc-400">BPM</span>
+              <input
+                type="number"
+                min="40"
+                max="240"
+                value={bpm}
+                onChange={(e) => setBpm(parseInt(e.target.value) || 168)}
                 className={cn(
-                  "bg-zinc-800 text-cyan-300 border-cyan-700/50 hover:bg-zinc-700",
-                  isMobile && "h-7 text-xs px-2"
+                  "px-1 rounded-md bg-zinc-900 text-cyan-200 border border-zinc-700 text-center",
+                  isMobile ? "h-6 w-10 text-xs" : "h-8 w-16 px-2"
                 )}
-              >
-                <FolderPlus className={cn("mr-1", isMobile ? "h-3 w-3" : "h-4 w-4")} />
-                {isMobile ? "Proj" : "Projects"}
-              </Button>
-              <div className={cn("flex items-center gap-1", isMobile && "scale-90")}>
-                <span className="text-xs text-zinc-400">BPM</span>
-                <input
-                  type="number"
-                  min="40"
-                  max="240"
-                  value={bpm}
-                  onChange={(e) => setBpm(parseInt(e.target.value) || 168)}
-                  className={cn(
-                    "w-16 px-2 rounded-md bg-zinc-900 text-cyan-200 border border-zinc-700 text-center",
-                    isMobile ? "h-6 w-12 text-xs" : "h-8"
-                  )}
-                />
-              </div>
+              />
             </div>
           </div>
-          
-          {/* Transport Controls - simplified for mobile */}
-          <div className={cn(
-            "flex items-center gap-3 p-3 border-b border-zinc-800/70 bg-zinc-950/80 backdrop-blur-sm",
-            isMobile && "p-1 gap-1 px-2"
-          )}>
-            {/* Centered container for play/stop buttons on mobile */}
-            <div className={cn(
-              "flex gap-2",
-              isMobile && "flex-1 justify-center"
-            )}>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => {
-                  // Always try to initialize audio on any button press on mobile
-                  if (isMobile && !audioInitialized) {
-                    initializeAudio();
-                    setTimeout(() => {
-                      handlePlayPause();
-                    }, 100);
-                  } else {
-                    handlePlayPause();
-                  }
-                }}
-                disabled={tracks.length === 0 || tracks.every((t) => !t.audioBuffer) || isLoading}
-                className={cn(
-                  "bg-zinc-900 border-cyan-500/50 hover:bg-zinc-800 shadow-md",
-                  isPlaying && "shadow-cyan-500/20 border-cyan-400",
-                  isMobile ? "h-8 w-8" : "h-10 w-10"
-                )}
-              >
-                <Play className={cn(
-                  isPlaying ? "text-cyan-400" : "text-zinc-300",
-                  isMobile ? "h-4 w-4" : "h-5 w-5"
-                )} />
-              </Button>
-              <Button 
-                variant="outline" 
-                size="icon" 
-                onClick={handleStop} 
-                disabled={!isPlaying || isLoading}
-                className={cn(
-                  "bg-zinc-900 border-zinc-700/80 hover:bg-zinc-800 shadow-md",
-                  isMobile ? "h-8 w-8" : "h-10 w-10"
-                )}
-              >
-                <Square className={cn(
-                  "text-zinc-300",
-                  isMobile ? "h-4 w-4" : "h-5 w-5"
-                )} />
-              </Button>
-            </div>
-            
-            {/* Move time display to sides on mobile */}
-            <div className={cn(
-              "flex-1 flex items-center gap-1 mx-1",
-              isMobile && "hidden"
-            )}>
-              <span className={cn(
-                "font-mono text-cyan-300 min-w-[40px] text-right",
-                isMobile ? "text-xs min-w-[24px]" : "text-sm"
-              )}>{formatTime(currentTime)}</span>
-              <div className="relative flex-1 group">
-                <div className="absolute -inset-1 bg-gradient-to-r from-cyan-500/30 to-blue-500/30 opacity-0 group-hover:opacity-100 group-active:opacity-100 rounded-full blur-sm transition-opacity"></div>
-                <div className={cn(
-                  "relative z-10 flex items-center",
-                  isMobile ? "h-3" : "h-5"
-                )}>
-                  <div className="absolute inset-y-0 left-0 w-full h-1 bg-zinc-800/90 rounded-full overflow-hidden">
-                    <div 
-                      className="absolute inset-y-0 left-0 h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full"
-                      style={{ width: `${(currentTime / duration) * 100}%` }}
-                    />
-                  </div>
+        </div>
+        
+        {/* Transport Controls - simplified for mobile */}
+        <div className={cn(
+          "flex items-center border-b border-zinc-800/70 bg-zinc-950/80 backdrop-blur-sm",
+          isMobile ? "py-1 px-1 gap-1.5" : "p-4 gap-3"
+        )}>
+          <div className={cn("flex", isMobile ? "gap-1" : "gap-2")}>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => {
+                resumeAudioContext();
+                handlePlayPause();
+              }}
+              disabled={tracks.length === 0 || tracks.every((t) => !t.audioBuffer) || isLoading}
+              className={cn(
+                "bg-zinc-900 border-cyan-500/50 hover:bg-zinc-800 shadow-md",
+                isPlaying && "shadow-cyan-500/20 border-cyan-400",
+                isMobile ? "h-7 w-7" : "h-10 w-10"
+              )}
+            >
+              <Play className={cn(
+                isPlaying ? "text-cyan-400" : "text-zinc-300",
+                isMobile ? "h-3.5 w-3.5" : "h-5 w-5"
+              )} />
+            </Button>
+            <Button 
+              variant="outline" 
+              size="icon" 
+              onClick={handleStop} 
+              disabled={!isPlaying || isLoading}
+              className={cn(
+                "bg-zinc-900 border-zinc-700/80 hover:bg-zinc-800 shadow-md",
+                isMobile ? "h-7 w-7" : "h-10 w-10"
+              )}
+            >
+              <Square className={cn(
+                "text-zinc-300",
+                isMobile ? "h-3.5 w-3.5" : "h-5 w-5"
+              )} />
+            </Button>
+          </div>
+          <div className="flex-1 flex items-center mx-1">
+            <span className={cn(
+              "font-mono text-cyan-300 text-right",
+              isMobile ? "text-[10px] min-w-[26px] mr-1" : "text-sm min-w-[40px] mr-2"
+            )}>{formatTime(currentTime)}</span>
+            <div className="relative flex-1 group">
+              <div className="absolute -inset-1 bg-gradient-to-r from-cyan-500/30 to-blue-500/30 opacity-0 group-hover:opacity-100 group-active:opacity-100 rounded-full blur-sm transition-opacity"></div>
+              <div className={cn(
+                "relative z-10 flex items-center",
+                isMobile ? "h-3" : "h-5"
+              )}>
+                <div className="absolute inset-y-0 left-0 w-full h-1 bg-zinc-800/90 rounded-full overflow-hidden">
                   <div 
-                    className={cn(
-                      "absolute rounded-full bg-white border border-cyan-500 shadow-md shadow-cyan-500/50 hover:scale-125 transition-transform cursor-pointer -translate-y-[1px]",
-                      isMobile ? "w-2.5 h-2.5" : "w-3 h-3"
-                    )}
-                    style={{ left: `calc(${(currentTime / duration) * 100}% - ${isMobile ? 5 : 6}px)` }}
-                  />
-                  <input
-                    type="range"
-                    min="0"
-                    max={duration}
-                    step="0.01"
-                    value={currentTime}
-                    onChange={(e) => handleSeek([parseFloat(e.target.value)])}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    style={{ touchAction: "none" }}
+                    className="absolute inset-y-0 left-0 h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full"
+                    style={{ width: `${(currentTime / duration) * 100}%` }}
                   />
                 </div>
-              </div>
-              <span className={cn(
-                "font-mono text-cyan-300 min-w-[40px]",
-                isMobile ? "text-xs min-w-[24px]" : "text-sm"
-              )}>{formatTime(duration)}</span>
-            </div>
-            
-            {/* Mobile-specific transport row that appears below the play buttons */}
-            {isMobile && (
-              <div className="w-full flex items-center gap-2 mt-1">
-                <span className="font-mono text-cyan-300 text-xs min-w-[24px] text-right">
-                  {formatTime(currentTime)}
-                </span>
-                
-                <div className="relative flex-1 group">
-                  <div className="relative h-3 flex items-center">
-                    <div className="absolute inset-y-0 left-0 w-full h-1 bg-zinc-800/90 rounded-full overflow-hidden">
-                      <div 
-                        className="absolute inset-y-0 left-0 h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full"
-                        style={{ width: `${(currentTime / duration) * 100}%` }}
-                      />
-                    </div>
-                    <div 
-                      className="absolute w-2.5 h-2.5 rounded-full bg-white border border-cyan-500 shadow-md shadow-cyan-500/50 hover:scale-125 transition-transform cursor-pointer -translate-y-[1px]"
-                      style={{ left: `calc(${(currentTime / duration) * 100}% - 5px)` }}
-                    />
-                    <input
-                      type="range"
-                      min="0"
-                      max={duration}
-                      step="0.01"
-                      value={currentTime}
-                      onChange={(e) => handleSeek([parseFloat(e.target.value)])}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                      style={{ touchAction: "none" }}
-                    />
-                  </div>
-                </div>
-                
-                <span className="font-mono text-cyan-300 text-xs min-w-[24px]">
-                  {formatTime(duration)}
-                </span>
-              </div>
-            )}
-            
-            {!isMobile && (
-              <div className="flex items-center gap-2 bg-zinc-900/70 px-3 py-2 rounded-md border border-zinc-800/70 shadow-inner">
-                <span className="text-sm text-cyan-300">Zoom:</span>
-                <Slider
-                  value={[zoom]}
-                  min={10}
-                  max={100}
-                  step={1}
-                  onValueChange={(value) => setZoom(value[0])}
-                  className="w-36"
+                <div 
+                  className={cn(
+                    "absolute rounded-full bg-white border border-cyan-500 shadow-md shadow-cyan-500/50 hover:scale-125 transition-transform cursor-pointer -translate-y-[1px]",
+                    isMobile ? "w-2.5 h-2.5" : "w-3 h-3"
+                  )}
+                  style={{ left: `calc(${(currentTime / duration) * 100}% - ${isMobile ? "5px" : "6px"})` }}
+                />
+                <input
+                  type="range"
+                  min="0"
+                  max={duration}
+                  step="0.01"
+                  value={currentTime}
+                  onChange={(e) => handleSeek([parseFloat(e.target.value)])}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  style={{ touchAction: "none" }}
                 />
               </div>
-            )}
+            </div>
+            <span className={cn(
+              "font-mono text-cyan-300",
+              isMobile ? "text-[10px] min-w-[26px] ml-1" : "text-sm min-w-[40px] ml-2"
+            )}>{formatTime(duration)}</span>
           </div>
-
-          {/* Condensed BPM and Loop Controls for mobile */}
-          {isMobile ? (
-            <div className="flex items-center justify-between p-1 border-b border-zinc-800/70 bg-zinc-950 shadow-md">
-              <div className="flex items-center gap-1">
-                <div className="flex items-center gap-1 bg-zinc-900/70 rounded-md px-1.5 py-0.5 border border-zinc-800/70 shadow-inner">
-                  <span className="text-[10px] font-medium text-cyan-300">Loop:</span>
-                  <Button 
-                    variant={isLooping ? "default" : "outline"} 
-                    size="sm" 
-                    className={cn(
-                      "h-5 min-w-[30px] px-1 text-[10px]",
-                      isLooping 
-                        ? "bg-cyan-600/80 hover:bg-cyan-700 text-white shadow-md shadow-cyan-500/20 border-none" 
-                        : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700"
-                    )}
-                    onClick={() => setIsLooping(!isLooping)}
-                  >
-                    {isLooping ? "On" : "Off"}
-                  </Button>
-                </div>
-              </div>
-              <div className="flex items-center gap-1 px-1.5">
-                <span className="text-[10px] text-cyan-300">Zoom:</span>
-                <Slider
-                  value={[zoom]}
-                  min={10}
-                  max={100}
-                  step={1}
-                  onValueChange={(value) => setZoom(value[0])}
-                  className="w-20"
-                />
-              </div>
+          {!isMobile && (
+            <div className="flex items-center gap-2 bg-zinc-900/70 px-3 py-2 rounded-md border border-zinc-800/70 shadow-inner">
+              <span className="text-sm text-cyan-300">Zoom:</span>
+              <Slider
+                value={[zoom]}
+                min={10}
+                max={100}
+                step={1}
+                onValueChange={(value) => setZoom(value[0])}
+                className="w-36"
+              />
             </div>
-          ) : (
-            <div className="flex items-center gap-4 p-3 border-b border-zinc-800/70 bg-zinc-950 shadow-md">
-              <div className="flex items-center gap-2 bg-zinc-900/70 rounded-md px-3 py-1.5 border border-zinc-800/70 shadow-inner">
-                <span className="text-sm font-medium text-cyan-300">BPM:</span>
-                <div className="flex items-center">
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="h-7 px-2 text-cyan-300 hover:bg-zinc-800 hover:text-cyan-200" 
-                    onClick={() => setBpm(Math.max(40, bpm - 1))}
-                  >
-                    -
-                  </Button>
-                  <input 
-                    type="number" 
-                    value={bpm} 
-                    onChange={(e) => setBpm(Number(e.target.value))} 
-                    className="w-16 h-7 text-center border-y border-zinc-700 bg-zinc-950 text-cyan-200" 
-                    min="40" 
-                    max="300"
-                  />
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="h-7 px-2 text-cyan-300 hover:bg-zinc-800 hover:text-cyan-200" 
-                    onClick={() => setBpm(Math.min(300, bpm + 1))}
-                  >
-                    +
-                  </Button>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 bg-zinc-900/70 rounded-md px-3 py-1.5 border border-zinc-800/70 shadow-inner">
-                <span className="text-sm font-medium text-cyan-300">Loop:</span>
+          )}
+        </div>
+
+        {/* Condensed BPM and Loop Controls for mobile */}
+        {isMobile ? (
+          <div className="flex items-center justify-between border-b border-zinc-800/70 bg-zinc-950 shadow-md">
+            <div className="flex items-center">
+              <div className="flex items-center bg-zinc-900/70 rounded-md px-1.5 py-0.5 border border-zinc-800/70 shadow-inner">
+                <span className="text-[10px] font-medium text-cyan-300">Loop:</span>
                 <Button 
                   variant={isLooping ? "default" : "outline"} 
                   size="sm" 
                   className={cn(
-                    "h-7 min-w-[40px]",
+                    "h-5 min-w-[28px] px-1 text-[10px]",
                     isLooping 
                       ? "bg-cyan-600/80 hover:bg-cyan-700 text-white shadow-md shadow-cyan-500/20 border-none" 
                       : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700"
@@ -1585,32 +1387,337 @@ export function AudioWorkspace() {
                 </Button>
               </div>
             </div>
-          )}
+            <div className="flex items-center px-1.5">
+              <span className="text-[10px] text-cyan-300 mr-1">Zoom:</span>
+              <Slider
+                value={[zoom]}
+                min={10}
+                max={100}
+                step={1}
+                onValueChange={(value) => setZoom(value[0])}
+                className="w-20"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-4 p-3 border-b border-zinc-800/70 bg-zinc-950 shadow-md">
+            <div className="flex items-center gap-2 bg-zinc-900/70 rounded-md px-3 py-1.5 border border-zinc-800/70 shadow-inner">
+              <span className="text-sm font-medium text-cyan-300">BPM:</span>
+              <div className="flex items-center">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="h-7 px-2 text-cyan-300 hover:bg-zinc-800 hover:text-cyan-200" 
+                  onClick={() => setBpm(Math.max(40, bpm - 1))}
+                >
+                  -
+                </Button>
+                <input 
+                  type="number" 
+                  value={bpm} 
+                  onChange={(e) => setBpm(Number(e.target.value))} 
+                  className="w-16 h-7 text-center border-y border-zinc-700 bg-zinc-950 text-cyan-200" 
+                  min="40" 
+                  max="300"
+                />
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="h-7 px-2 text-cyan-300 hover:bg-zinc-800 hover:text-cyan-200" 
+                  onClick={() => setBpm(Math.min(300, bpm + 1))}
+                >
+                  +
+                </Button>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 bg-zinc-900/70 rounded-md px-3 py-1.5 border border-zinc-800/70 shadow-inner">
+              <span className="text-sm font-medium text-cyan-300">Loop:</span>
+              <Button 
+                variant={isLooping ? "default" : "outline"} 
+                size="sm" 
+                className={cn(
+                  "h-7 min-w-[40px]",
+                  isLooping 
+                    ? "bg-cyan-600/80 hover:bg-cyan-700 text-white shadow-md shadow-cyan-500/20 border-none" 
+                    : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700"
+                )}
+                onClick={() => setIsLooping(!isLooping)}
+              >
+                {isLooping ? "On" : "Off"}
+              </Button>
+            </div>
+          </div>
+        )}
 
-          {/* Tracks Container - Main area with full height */}
-          <div className="flex flex-col flex-1 overflow-hidden relative bg-black">
-            {/* Timeline - simplified for mobile */}
+        {/* Tracks Container - Main area with full height */}
+        <div className="flex flex-col flex-1 overflow-hidden relative bg-black">
+          {/* Timeline - simplified for mobile */}
+          <div className={cn(
+            "flex border-b border-zinc-800/70 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-10",
+            isMobile ? "h-5" : "h-9"
+          )}>
             <div className={cn(
-              "flex border-b border-zinc-800/70 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-10",
-              isMobile ? "h-5" : "h-9"
+              "border-r border-zinc-800/70 flex items-center justify-center bg-zinc-900/80",
+              isMobile ? (sidebarCollapsed ? "w-6" : "w-28") : "w-52"
             )}>
-              <div className={cn(
-                "border-r border-zinc-800/70 flex items-center justify-center bg-zinc-900/80",
-                isMobile ? (sidebarCollapsed ? "w-6" : "w-32") : "w-52"
-              )}>
-                {!isMobile && <span className="text-xs font-medium text-cyan-400/80">BARS</span>}
+              {!isMobile && <span className="text-xs font-medium text-cyan-400/80">BARS</span>}
+            </div>
+            
+            <div className="relative flex-1 overflow-hidden">
+              <div className="absolute top-0 bottom-0 w-0.5 bg-cyan-500 z-10 pointer-events-none shadow-[0_0_10px_rgba(34,211,238,0.5)]"
+                style={{ 
+                  left: `${currentTime * zoom}px`,
+                  height: '100%',
+                }} 
+              />
+
+              <div
+                className="absolute top-0 bottom-0 flex"
+                style={{
+                  width: `${Math.max(duration * zoom, 100)}px`,
+                  minWidth: "100%",
+                }}
+              >
+                {Array.from({ length: Math.floor(duration * (bpm / 60) / 4) + 2 }).map((_, i) => {
+                  const barTimeInSeconds = (i * 4 * 60) / bpm;
+                  
+                  const currentBeat = Math.floor((currentTime * bpm / 60));
+                  const currentBar = Math.floor(currentBeat / 4);
+                  const isCurrentBar = i === currentBar;
+                  
+                  return (
+                    <div 
+                      key={i} 
+                      className="relative"
+                      style={{ 
+                        position: 'absolute', 
+                        left: `${barTimeInSeconds * zoom}px`,
+                        height: '100%',
+                        width: `${(4 * 60 / bpm) * zoom}px`
+                      }}
+                    >
+                      <div className={cn(
+                        "absolute top-0 left-0 h-full flex items-center",
+                        isCurrentBar ? "text-cyan-400 font-bold" : "text-zinc-500"
+                      )}>
+                        <span className={cn(
+                          "pl-1",
+                          isMobile ? "text-[8px]" : "text-xs"
+                        )}>{i+1}</span>
+                      </div>
+                      
+                      <div 
+                        className={cn(
+                          "absolute top-0 bottom-0 left-0 border-l",
+                          isCurrentBar ? "border-cyan-500/70 border-l-2 shadow-[0_0_8px_rgba(34,211,238,0.3)]" : "border-zinc-700/70"
+                        )}
+                      />
+                      
+                      {/* Only show beat markers if zoom is high enough */}
+                      {zoom > 20 && [1, 2, 3].map((beat) => (
+                        <div 
+                          key={beat}
+                          className="absolute top-0 bottom-0 border-l border-zinc-800/70"
+                          style={{
+                            left: `${beat * (60 / bpm) * zoom}px`,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Tracks */}
+          <div className="flex-1 overflow-hidden relative">
+            <div className="flex h-full">
+              {/* Track controls sidebar - conditionally show based on mobile state */}
+              <div 
+                ref={sidebarRef}
+                className={cn(
+                  "flex flex-col border-r border-zinc-800/70 bg-zinc-900/50 flex-shrink-0 overflow-y-auto transition-all duration-200",
+                  isMobile 
+                    ? (sidebarCollapsed ? "w-6" : "w-28") 
+                    : "w-52"
+                )}
+              >
+                {tracks.map((track) => (
+                  <div 
+                    key={track.id} 
+                    className={cn(
+                      "border-b border-zinc-800/70 flex flex-col justify-between",
+                      isMobile ? (sidebarCollapsed ? "h-16 p-0.5" : "h-16 p-1") : "h-32 p-2"
+                    )}
+                  >
+                    {sidebarCollapsed && isMobile ? (
+                      // Collapsed mobile view - just show colored indicator and minimal controls
+                      <div className="flex flex-col h-full items-center justify-between py-0.5">
+                        <div className={cn("w-2.5 h-2.5 rounded-full shadow-[0_0_4px]", track.color, track.color.replace('bg-', 'shadow-'))} />
+                        <div className="flex flex-col gap-0.5 items-center">
+                          <button
+                            className={cn(
+                              "w-5 h-5 flex items-center justify-center rounded-md shadow-md transition-colors",
+                              track.muted 
+                                ? "bg-red-600/90 text-white shadow-red-500/20" 
+                                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
+                            )}
+                            onClick={() => handleTrackUpdate(track.id, { muted: !track.muted })}
+                          >
+                            <span className="text-[8px] font-medium">M</span>
+                          </button>
+                          <button
+                            className={cn(
+                              "w-5 h-5 flex items-center justify-center rounded-md shadow-md transition-colors",
+                              track.solo 
+                                ? "bg-amber-500/90 text-amber-950 shadow-amber-400/20" 
+                                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
+                            )}
+                            onClick={() => handleTrackUpdate(track.id, { solo: !track.solo })}
+                          >
+                            <span className="text-[8px] font-medium">S</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      // Full sidebar view - desktop or expanded mobile
+                      <>
+                        <div className="flex items-center gap-1 mb-1">
+                          <div className={cn(
+                            "rounded-full shadow-[0_0_5px]", 
+                            track.color, 
+                            track.color.replace('bg-', 'shadow-'),
+                            isMobile ? "w-2.5 h-2.5" : "w-3 h-3"
+                          )} />
+                          <input
+                            type="text"
+                            value={track.name}
+                            onChange={(e) => handleTrackUpdate(track.id, { name: e.target.value })}
+                            className={cn(
+                              "bg-zinc-900 border border-zinc-800 rounded-md px-1 py-0.5 w-full text-zinc-200 focus:border-cyan-500/70 focus:outline-none focus:ring-1 focus:ring-cyan-500/30",
+                              isMobile ? "text-[10px]" : "text-sm py-1 px-2"
+                            )}
+                          />
+                        </div>
+                        <div className={cn(
+                          "flex items-center mb-1",
+                          isMobile ? "gap-0.5" : "gap-1"
+                        )}>
+                          <button
+                            className={cn(
+                              "flex items-center justify-center rounded-md shadow-md transition-colors",
+                              track.muted 
+                                ? "bg-red-600/90 text-white shadow-red-500/20" 
+                                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200",
+                              isMobile ? "w-5 h-5" : "w-7 h-7"
+                            )}
+                            onClick={() => handleTrackUpdate(track.id, { muted: !track.muted })}
+                          >
+                            <span className={cn(
+                              "font-medium",
+                              isMobile ? "text-[8px]" : "text-xs"
+                            )}>M</span>
+                          </button>
+                          <button
+                            className={cn(
+                              "flex items-center justify-center rounded-md shadow-md transition-colors",
+                              track.solo 
+                                ? "bg-amber-500/90 text-amber-950 shadow-amber-400/20" 
+                                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200",
+                              isMobile ? "w-5 h-5" : "w-7 h-7"
+                            )}
+                            onClick={() => handleTrackUpdate(track.id, { solo: !track.solo })}
+                          >
+                            <span className={cn(
+                              "font-medium",
+                              isMobile ? "text-[8px]" : "text-xs"
+                            )}>S</span>
+                          </button>
+                          <div className="flex flex-col gap-0.5 w-full pr-0.5">
+                            {!isMobile && (
+                              <div className="flex items-center justify-between text-[10px] text-zinc-400">
+                                <span>Vol</span>
+                                <span>{Math.round(track.volume * 100)}%</span>
+                              </div>
+                            )}
+                            <VolumeSlider 
+                              value={track.volume} 
+                              onChange={(value) => handleTrackUpdate(track.id, { volume: value })}
+                              trackColor={track.muted ? "bg-zinc-600/50" : track.color.replace('bg-', 'bg-') + "/80"}
+                            />
+                          </div>
+                        </div>
+                        {!isMobile && (
+                          <div className="flex flex-col w-full mb-1">
+                            <LoudnessMeter 
+                              level={rmsLevels[track.id] || 0} 
+                              className="h-1.5 w-full"
+                            />
+                          </div>
+                        )}
+                        {isMobile && (
+                          <button
+                            className="text-[8px] px-1 py-0.5 bg-red-600/80 text-white rounded-sm hover:bg-red-700 shadow-sm transition-colors text-center mt-0.5 w-full"
+                            onClick={() => handleRemoveTrack(track.id)}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ))}
+                
+                <div className={cn(
+                  "mt-auto bg-zinc-900/80 border-t border-zinc-800/70",
+                  isMobile ? (sidebarCollapsed ? "p-0.5" : "p-1") : "p-2"
+                )}>
+                  {!sidebarCollapsed && (
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={handleAddTrack} 
+                      className={cn(
+                        "w-full bg-zinc-800 border-cyan-500/50 text-cyan-300 hover:bg-zinc-700 hover:text-cyan-200 shadow-md",
+                        isMobile && "text-[8px] py-0.5 h-5"
+                      )}
+                    >
+                      <Plus className={cn("mr-0.5", isMobile ? "h-2.5 w-2.5" : "h-4 w-4")} />
+                      {isMobile ? "Add" : "Add Track"}
+                    </Button>
+                  )}
+                  {sidebarCollapsed && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleAddTrack}
+                      className={cn(
+                        "w-full bg-zinc-800 border-cyan-500/50 text-cyan-300",
+                        isMobile ? "h-5 p-0" : "h-6 p-0"
+                      )}
+                    >
+                      <Plus className={isMobile ? "h-2.5 w-2.5" : "h-3 w-3"} />
+                    </Button>
+                  )}
+                </div>
               </div>
               
-              <div className="relative flex-1 overflow-hidden">
-                <div className="absolute top-0 bottom-0 w-0.5 bg-cyan-500 z-10 pointer-events-none shadow-[0_0_10px_rgba(34,211,238,0.5)]"
+              {/* Track content area */}
+              <div 
+                ref={trackContentRef} 
+                className="flex-1 overflow-auto relative"
+                onScroll={handleTrackScroll}
+              >
+                <div className="absolute top-0 bottom-0 w-0.5 bg-cyan-500 z-20 pointer-events-none shadow-[0_0_10px_rgba(34,211,238,0.5)]"
                   style={{ 
                     left: `${currentTime * zoom}px`,
                     height: '100%',
                   }} 
                 />
               
-                <div
-                  className="absolute top-0 bottom-0 flex"
+                <div 
+                  className="absolute top-0 bottom-0 left-0 right-0 pointer-events-none z-0"
                   style={{
                     width: `${Math.max(duration * zoom, 100)}px`,
                     minWidth: "100%",
@@ -1619,44 +1726,24 @@ export function AudioWorkspace() {
                   {Array.from({ length: Math.floor(duration * (bpm / 60) / 4) + 2 }).map((_, i) => {
                     const barTimeInSeconds = (i * 4 * 60) / bpm;
                     
-                    const currentBeat = Math.floor((currentTime * bpm / 60));
-                    const currentBar = Math.floor(currentBeat / 4);
-                    const isCurrentBar = i === currentBar;
-                    
                     return (
-                      <div 
-                        key={i} 
-                        className="relative"
-                        style={{ 
-                          position: 'absolute', 
-                          left: `${barTimeInSeconds * zoom}px`,
-                          height: '100%',
-                          width: `${(4 * 60 / bpm) * zoom}px`
-                        }}
-                      >
-                        <div className={cn(
-                          "absolute top-0 left-0 h-full flex items-center",
-                          isCurrentBar ? "text-cyan-400 font-bold" : "text-zinc-500"
-                        )}>
-                          <span className={cn(
-                            "pl-1",
-                            isMobile ? "text-[8px]" : "text-xs"
-                          )}>{i+1}</span>
-                        </div>
-                        
+                      <div key={`bar-${i}`}>
                         <div 
-                          className={cn(
-                            "absolute top-0 bottom-0 left-0 border-l",
-                            isCurrentBar ? "border-cyan-500/70 border-l-2 shadow-[0_0_8px_rgba(34,211,238,0.3)]" : "border-zinc-700/70"
-                          )}
+                          className="absolute top-0 bottom-0 border-l border-zinc-800/50"
+                          style={{ 
+                            left: `${barTimeInSeconds * zoom}px`,
+                            height: '100%',
+                          }}
                         />
                         
-                        {[1, 2, 3].map((beat) => (
+                        {/* Reduce beat markers when zoomed out */}
+                        {zoom > 20 && [1, 2, 3].map((beat) => (
                           <div 
-                            key={beat}
-                            className="absolute top-0 bottom-0 border-l border-zinc-800/70"
+                            key={`beat-${i}-${beat}`}
+                            className="absolute top-0 bottom-0 border-l border-zinc-900/60"
                             style={{
-                              left: `${beat * (60 / bpm) * zoom}px`,
+                              left: `${(barTimeInSeconds + beat * (60 / bpm)) * zoom}px`,
+                              height: '100%',
                             }}
                           />
                         ))}
@@ -1664,311 +1751,100 @@ export function AudioWorkspace() {
                     );
                   })}
                 </div>
-              </div>
-            </div>
-
-            {/* Tracks */}
-            <div className="flex-1 overflow-hidden relative">
-              <div className="flex h-full">
-                {/* Track controls sidebar - conditionally show based on mobile state */}
-                <div 
-                  ref={sidebarRef}
-                  className={cn(
-                    "flex flex-col border-r border-zinc-800/70 bg-zinc-900/50 flex-shrink-0 overflow-y-auto transition-all duration-200",
-                    isMobile 
-                      ? (sidebarCollapsed ? "w-6" : "w-32") 
-                      : "w-52"
-                  )}
+                
+                <div
+                  ref={trackContainerRef}
+                  className="relative"
+                  style={{
+                    width: `${Math.max(duration * zoom, 100)}px`,
+                    minWidth: "100%",
+                  }}
                 >
                   {tracks.map((track) => (
                     <div 
-                      key={track.id} 
+                      key={track.id}
                       className={cn(
-                        "border-b border-zinc-800/70 flex flex-col justify-between",
-                        isMobile ? (sidebarCollapsed ? "h-16 p-0.5" : "h-20 p-1") : "h-32 p-2"
+                        "relative border-b border-zinc-900/70",
+                        isMobile ? "h-16" : "h-32"
                       )}
                     >
-                      {sidebarCollapsed && isMobile ? (
-                        // Collapsed mobile view - just show colored indicator and minimal controls
-                        <div className="flex flex-col h-full items-center justify-between py-0.5">
-                          <div className={cn("w-3 h-3 rounded-full shadow-[0_0_5px]", track.color, track.color.replace('bg-', 'shadow-'))} />
-                          <div className="flex flex-col gap-0.5 items-center">
-                            <button
-                              className={cn(
-                                "w-5 h-5 flex items-center justify-center rounded-sm shadow-md transition-colors",
-                                track.muted 
-                                  ? "bg-red-600/90 text-white shadow-red-500/20" 
-                                  : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
-                              )}
-                              onClick={() => handleTrackUpdate(track.id, { muted: !track.muted })}
-                            >
-                              <span className="text-[8px] font-medium">M</span>
-                            </button>
-                            <button
-                              className={cn(
-                                "w-5 h-5 flex items-center justify-center rounded-sm shadow-md transition-colors",
-                                track.solo 
-                                  ? "bg-amber-500/90 text-amber-950 shadow-amber-400/20" 
-                                  : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
-                              )}
-                              onClick={() => handleTrackUpdate(track.id, { solo: !track.solo })}
-                            >
-                              <span className="text-[8px] font-medium">S</span>
-                            </button>
+                      {track.audioBuffer && (
+                        <div 
+                          className={cn(
+                            "absolute rounded-md transition-all shadow-md",
+                            track.color,
+                            `shadow-[0_0_10px] ${track.color.replace('bg-', 'shadow-')}`,
+                            (track.muted && !track.solo) && "opacity-40",
+                            dragInfo?.trackId === track.id 
+                              ? "cursor-grabbing shadow-lg z-10 ring-2 ring-white/50 scale-[1.01]" 
+                              : "cursor-grab hover:brightness-110 hover:shadow-lg",
+                            isMobile ? "top-1 bottom-1" : "top-2 bottom-2"
+                          )}
+                          style={{
+                            left: `${(track.position || 0) * zoom}px`,
+                            width: `${track.audioBuffer.duration * zoom}px`,
+                          }}
+                          onMouseDown={(e) => handleDragStart(e, track.id)}
+                          onTouchStart={(e) => {
+                            // Touch support for mobile drag
+                            const touch = e.touches[0];
+                            if (touch && trackContainerRef.current) {
+                              const elementRect = (e.target as HTMLElement).getBoundingClientRect();
+                              const touchX = touch.clientX;
+                              
+                              handleDragStart({
+                                clientX: touchX,
+                                preventDefault: () => e.preventDefault(),
+                                target: e.target
+                              } as unknown as React.MouseEvent, track.id);
+                            }
+                          }}
+                        >
+                          <div className={cn(
+                            "absolute inset-x-0 top-0 bg-black/30 hover:bg-black/40 rounded-t cursor-move flex items-center justify-center",
+                            isMobile ? "h-2" : "h-3"
+                          )}>
+                            <div className={cn(
+                              "bg-white/70 rounded-full",
+                              isMobile ? "w-6 h-0.5" : "w-10 h-1"
+                            )}></div>
+                          </div>
+                          
+                          <div className="absolute -left-0.5 top-0 bottom-0 w-0.5 bg-white/70"></div>
+                          <div className="absolute -right-0.5 top-0 bottom-0 w-0.5 bg-white/70"></div>
+                          
+                          <div className={cn(
+                            "absolute inset-0 flex flex-col justify-between select-none",
+                            isMobile ? "px-1.5 py-0.5" : "px-3 py-1.5" 
+                          )}>
+                            <div className="w-full overflow-hidden">
+                              <div className="flex items-center justify-between">
+                                <span className={cn(
+                                  "font-medium truncate max-w-[85%]",
+                                  isMobile ? "text-[8px]" : "text-xs"
+                                )}>{track.name}</span>
+                                <span className={cn(
+                                  "bg-black/50 rounded",
+                                  isMobile ? "text-[6px] px-0.5" : "text-[9px] px-1.5 py-0.5"
+                                )}>{formatTime(track.audioBuffer.duration)}</span>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="absolute inset-0 px-1 flex items-center justify-center overflow-hidden pointer-events-none">
+                            {renderWaveform(track.audioBuffer, track.color)}
                           </div>
                         </div>
-                      ) : (
-                        // Full sidebar view - desktop or expanded mobile
-                        <>
-                          <div className="flex items-center gap-1 mb-1">
-                            <div className={cn("w-3 h-3 rounded-full shadow-[0_0_5px]", track.color, track.color.replace('bg-', 'shadow-'))} />
-                            <input
-                              type="text"
-                              value={track.name}
-                              onChange={(e) => handleTrackUpdate(track.id, { name: e.target.value })}
-                              className={cn(
-                                "bg-zinc-900 border border-zinc-800 rounded-md px-2 py-0.5 w-full text-zinc-200 focus:border-cyan-500/70 focus:outline-none focus:ring-1 focus:ring-cyan-500/30",
-                                isMobile ? "text-[10px]" : "text-sm"
-                              )}
-                            />
-                          </div>
-                          <div className="flex items-center gap-1 mb-1">
-                            <button
-                              className={cn(
-                                "flex items-center justify-center rounded-md shadow-md transition-colors",
-                                track.muted 
-                                  ? "bg-red-600/90 text-white shadow-red-500/20" 
-                                  : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200",
-                                isMobile ? "w-5 h-5" : "w-7 h-7"
-                              )}
-                              onClick={() => handleTrackUpdate(track.id, { muted: !track.muted })}
-                            >
-                              <span className={cn(
-                                "font-medium",
-                                isMobile ? "text-[8px]" : "text-xs"
-                              )}>M</span>
-                            </button>
-                            <button
-                              className={cn(
-                                "flex items-center justify-center rounded-md shadow-md transition-colors",
-                                track.solo 
-                                  ? "bg-amber-500/90 text-amber-950 shadow-amber-400/20" 
-                                  : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200",
-                                isMobile ? "w-5 h-5" : "w-7 h-7"
-                              )}
-                              onClick={() => handleTrackUpdate(track.id, { solo: !track.solo })}
-                            >
-                              <span className={cn(
-                                "font-medium",
-                                isMobile ? "text-[8px]" : "text-xs"
-                              )}>S</span>
-                            </button>
-                            <div className="flex flex-col gap-0.5 w-full pr-1">
-                              <div className="flex items-center justify-between text-[8px] text-zinc-400">
-                                <span>Vol</span>
-                                <span>{Math.round(track.volume * 100)}%</span>
-                              </div>
-                              <VolumeSlider 
-                                value={track.volume} 
-                                onChange={(value) => handleTrackUpdate(track.id, { volume: value })}
-                                trackColor={track.muted ? "bg-zinc-600/50" : track.color.replace('bg-', 'bg-') + "/80"}
-                              />
-                            </div>
-                          </div>
-                          <div className="flex flex-col w-full mb-1">
-                            <LoudnessMeter 
-                              level={rmsLevels[track.id] || 0} 
-                              className="h-1 w-full"
-                            />
-                          </div>
-                          {!isMobile && (
-                            <div className="flex items-center gap-1.5 justify-between">
-                              <input
-                                type="file"
-                                accept="audio/*"
-                                className="hidden"
-                                id={`file-${track.id}`}
-                                onChange={(e) => handleFileUpload(e, track.id)}
-                              />
-                              <label
-                                htmlFor={`file-${track.id}`}
-                                className="text-xs px-3 py-1.5 bg-zinc-800 text-cyan-300 rounded-md cursor-pointer hover:bg-zinc-700 shadow-sm transition-colors flex-grow text-center"
-                              >
-                                Upload
-                              </label>
-                              <button
-                                className="text-xs px-3 py-1.5 bg-red-600/80 text-white rounded-md hover:bg-red-700 shadow-sm transition-colors flex-grow text-center"
-                                onClick={() => handleRemoveTrack(track.id)}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          )}
-                          {isMobile && (
-                            <button
-                              className="text-[8px] px-1.5 py-0.5 bg-red-600/80 text-white rounded-sm hover:bg-red-700 shadow-sm transition-colors text-center"
-                              onClick={() => handleRemoveTrack(track.id)}
-                            >
-                              Remove
-                            </button>
-                          )}
-                        </>
                       )}
                     </div>
                   ))}
-                  
-                  <div className={cn(
-                    "mt-auto bg-zinc-900/80 border-t border-zinc-800/70",
-                    isMobile ? (sidebarCollapsed ? "p-0.5" : "p-1") : "p-2"
-                  )}>
-                    {!sidebarCollapsed && (
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={handleAddTrack} 
-                        className={cn(
-                          "w-full bg-zinc-800 border-cyan-500/50 text-cyan-300 hover:bg-zinc-700 hover:text-cyan-200 shadow-md",
-                          isMobile && "text-[10px] py-0.5 h-6"
-                        )}
-                      >
-                        <Plus className={cn("mr-1", isMobile ? "h-2.5 w-2.5" : "h-4 w-4")} />
-                        {isMobile ? "Add" : "Add Track"}
-                      </Button>
-                    )}
-                    {sidebarCollapsed && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleAddTrack}
-                        className="w-full h-5 p-0 bg-zinc-800 border-cyan-500/50 text-cyan-300"
-                      >
-                        <Plus className="h-2.5 w-2.5" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                
-                {/* Track content area */}
-                <div 
-                  ref={trackContentRef} 
-                  className="flex-1 overflow-auto relative"
-                  onScroll={handleTrackScroll}
-                >
-                  <div className="absolute top-0 bottom-0 w-0.5 bg-cyan-500 z-20 pointer-events-none shadow-[0_0_10px_rgba(34,211,238,0.5)]"
-                    style={{ 
-                      left: `${currentTime * zoom}px`,
-                      height: '100%',
-                    }} 
-                  />
-                
-                  <div 
-                    className="absolute top-0 bottom-0 left-0 right-0 pointer-events-none z-0"
-                    style={{
-                      width: `${Math.max(duration * zoom, 100)}px`,
-                      minWidth: "100%",
-                    }}
-                  >
-                    {Array.from({ length: Math.floor(duration * (bpm / 60) / 4) + 2 }).map((_, i) => {
-                      const barTimeInSeconds = (i * 4 * 60) / bpm;
-                      
-                      return (
-                        <div key={`bar-${i}`}>
-                          <div 
-                            className="absolute top-0 bottom-0 border-l border-zinc-800/50"
-                            style={{ 
-                              left: `${barTimeInSeconds * zoom}px`,
-                              height: '100%',
-                            }}
-                          />
-                          
-                          {[1, 2, 3].map((beat) => (
-                            <div 
-                              key={`beat-${i}-${beat}`}
-                              className="absolute top-0 bottom-0 border-l border-zinc-900/60"
-                              style={{
-                                left: `${(barTimeInSeconds + beat * (60 / bpm)) * zoom}px`,
-                                height: '100%',
-                              }}
-                            />
-                          ))}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  
-                  <div
-                    ref={trackContainerRef}
-                    className="relative"
-                    style={{
-                      width: `${Math.max(duration * zoom, 100)}px`,
-                      minWidth: "100%",
-                    }}
-                  >
-                    {tracks.map((track) => (
-                      <div 
-                        key={track.id}
-                        className={cn(
-                          "relative border-b border-zinc-900/70",
-                          isMobile ? "h-16" : "h-32"
-                        )}
-                      >
-                        {track.audioBuffer && (
-                          <div 
-                            className={cn(
-                              "absolute top-1 bottom-1 rounded-md transition-all shadow-md",
-                              track.color,
-                              `shadow-[0_0_10px] ${track.color.replace('bg-', 'shadow-')}`,
-                              (track.muted && !track.solo) && "opacity-40",
-                              dragInfo?.trackId === track.id 
-                                ? "cursor-grabbing shadow-lg z-10 ring-2 ring-white/50 scale-[1.01]" 
-                                : "cursor-grab hover:brightness-110 hover:shadow-lg"
-                            )}
-                            style={{
-                              left: `${(track.position || 0) * zoom}px`,
-                              width: `${track.audioBuffer.duration * zoom}px`,
-                            }}
-                            onMouseDown={(e) => handleDragStart(e, track.id)}
-                          >
-                            <div className="absolute inset-x-0 top-0 h-2 bg-black/30 hover:bg-black/40 rounded-t cursor-move flex items-center justify-center">
-                              <div className="w-8 h-0.5 bg-white/70 rounded-full"></div>
-                            </div>
-                            
-                            <div className="absolute -left-0.5 top-0 bottom-0 w-0.5 bg-white/70"></div>
-                            <div className="absolute -right-0.5 top-0 bottom-0 w-0.5 bg-white/70"></div>
-                            
-                            <div className={cn(
-                              "absolute inset-0 flex flex-col justify-between select-none",
-                              isMobile ? "px-1.5 py-0.5" : "px-3 py-1.5" 
-                            )}>
-                              <div className="w-full overflow-hidden">
-                                <div className="flex items-center justify-between">
-                                  <span className={cn(
-                                    "font-medium truncate max-w-[85%]",
-                                    isMobile ? "text-[8px]" : "text-xs"
-                                  )}>{track.name}</span>
-                                  <span className={cn(
-                                    "bg-black/50 rounded",
-                                    isMobile ? "text-[6px] px-1 py-0" : "text-[9px] px-1.5 py-0.5"
-                                  )}>{formatTime(track.audioBuffer.duration)}</span>
-                                </div>
-                              </div>
-                            </div>
-                            
-                            <div className="absolute inset-0 px-1 flex items-center justify-center overflow-hidden pointer-events-none">
-                              {renderWaveform(track.audioBuffer, track.color)}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-    </>
+    </div>
   )
 }
 
