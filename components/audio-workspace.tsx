@@ -299,24 +299,41 @@ export function AudioWorkspace() {
     }
   }, [bpm, isPlaying]);
 
-  // Initialize audio context with specific handling for iOS
+  // Modify the useEffect for audio initialization to make it more robust for mobile
   useEffect(() => {
     if (typeof window !== "undefined" && !audioContext.current) {
-      // Create audio context
-      audioContext.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      
-      // Check if context is suspended (likely on iOS)
-      if (audioContext.current.state === "suspended") {
-        setAudioInitialized(false);
+      try {
+        // Create audio context with proper mobile handling
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        audioContext.current = new AudioContextClass({ latencyHint: "playback" });
         
-        // For iOS devices, show audio prompt after a brief delay
-        if (isIOS) {
-          setTimeout(() => {
-            setShowAudioPrompt(true);
-          }, 1000);
+        // Log audio context state
+        console.log('Audio context created with state:', audioContext.current.state);
+        
+        // Check if context is suspended (likely on iOS/mobile)
+        if (audioContext.current.state === "suspended") {
+          setAudioInitialized(false);
+          
+          // For iOS devices, show audio prompt after a brief delay
+          if (isIOS) {
+            setTimeout(() => {
+              setShowAudioPrompt(true);
+            }, 500);
+          }
+        } else {
+          setAudioInitialized(true);
         }
-      } else {
-        setAudioInitialized(true);
+        
+        // Add listener for state changes
+        audioContext.current.onstatechange = () => {
+          console.log('Audio context state changed to:', audioContext.current?.state);
+          if (audioContext.current?.state === 'running') {
+            setAudioInitialized(true);
+            setShowAudioPrompt(false);
+          }
+        };
+      } catch (error) {
+        console.error('Error initializing audio context:', error);
       }
     }
 
@@ -327,22 +344,30 @@ export function AudioWorkspace() {
     };
   }, [isIOS]);
 
-  // Function to initialize audio properly for iOS
+  // Enhance the initializeAudio function to be more robust for mobile
   const initializeAudio = () => {
+    console.log('Attempting to initialize audio...');
     if (!audioContext.current) return;
     
-    // Create and play a silent buffer to unlock audio
-    const buffer = audioContext.current.createBuffer(1, 1, 22050);
-    const source = audioContext.current.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioContext.current.destination);
-    source.start(0);
-    
-    // Resume audio context
-    audioContext.current.resume().then(() => {
-      setAudioInitialized(true);
-      setShowAudioPrompt(false);
-    });
+    try {
+      // Create and play a silent buffer to unlock audio
+      const buffer = audioContext.current.createBuffer(1, 1, 22050);
+      const source = audioContext.current.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioContext.current.destination);
+      source.start(0);
+      
+      // Resume audio context
+      audioContext.current.resume().then(() => {
+        console.log('Audio context resumed successfully');
+        setAudioInitialized(true);
+        setShowAudioPrompt(false);
+      }).catch(err => {
+        console.error('Failed to resume audio context:', err);
+      });
+    } catch (error) {
+      console.error('Error in initializeAudio:', error);
+    }
   };
 
   useEffect(() => {
@@ -488,18 +513,34 @@ export function AudioWorkspace() {
     }
   }
 
+  // Improve the startPlayback function to handle mobile audio better
   const startPlayback = () => {
-    if (!audioContext.current || tracks.length === 0) return;
+    console.log('Start playback called, audio initialized:', audioInitialized);
+    
+    if (!audioContext.current || tracks.length === 0) {
+      console.log('No audio context or tracks, cannot start playback');
+      return;
+    }
 
-    // For iOS, ensure audio is initialized
+    // For all devices, ensure audio is initialized
     if (audioContext.current.state === "suspended") {
+      console.log('Audio context suspended, attempting to resume...');
+      
+      initializeAudio(); // Always call initialize first
+      
       audioContext.current.resume().then(() => {
+        console.log('Audio context resumed, starting playback');
         setAudioInitialized(true);
         setShowAudioPrompt(false);
         // Continue with playback after resuming
-        startActualPlayback();
+        setTimeout(() => {
+          startActualPlayback();
+        }, 100); // Small delay to ensure context is fully resumed
+      }).catch(err => {
+        console.error('Failed to resume audio context:', err);
       });
     } else {
+      console.log('Audio context already running, starting playback directly');
       startActualPlayback();
     }
   };
@@ -570,16 +611,19 @@ export function AudioWorkspace() {
     setIsPlaying(false)
   }
 
+  // Modify the handlePlayPause to work better for all mobile devices
   const handlePlayPause = () => {
     if (isPlaying) {
       stopPlayback(false);
     } else {
-      if (!audioInitialized && isIOS) {
+      // Always try to initialize audio on play for any mobile device
+      if (!audioInitialized || (audioContext.current && audioContext.current.state === "suspended")) {
+        console.log('Initializing audio before playing');
         initializeAudio();
-        // Wait for initialization before playing
+        // Allow some time for initialization to complete
         setTimeout(() => {
           startPlayback();
-        }, 100);
+        }, 150);
       } else {
         startPlayback();
       }
@@ -1189,18 +1233,18 @@ export function AudioWorkspace() {
       <div className="fixed inset-0 bg-zinc-950 text-white font-mono overflow-hidden">
         {/* Audio prompt for iOS devices */}
         {showAudioPrompt && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-zinc-900 border border-cyan-500/50 rounded-lg p-5 max-w-xs w-full shadow-lg">
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-zinc-900 border-2 border-cyan-500 rounded-lg p-5 max-w-xs w-full shadow-xl animate-pulse">
               <div className="flex justify-center mb-4">
-                <Volume2 className="h-12 w-12 text-cyan-400" />
+                <Volume2 className="h-14 w-14 text-cyan-400" />
               </div>
-              <h3 className="text-lg text-center font-medium text-white mb-2">Enable Audio</h3>
-              <p className="text-sm text-zinc-300 text-center mb-4">
-                Tap the button below to enable audio playback, even in silent mode.
+              <h3 className="text-xl text-center font-bold text-white mb-3">Enable Audio</h3>
+              <p className="text-sm text-zinc-300 text-center mb-5">
+                Tap the button below to enable audio playback on your mobile device.
               </p>
               <Button 
                 onClick={initializeAudio} 
-                className="w-full bg-cyan-600 hover:bg-cyan-700 text-white"
+                className="w-full h-12 bg-cyan-600 hover:bg-cyan-700 text-white text-lg font-medium"
               >
                 Enable Audio
               </Button>
@@ -1313,21 +1357,35 @@ export function AudioWorkspace() {
             "flex items-center gap-3 p-3 border-b border-zinc-800/70 bg-zinc-950/80 backdrop-blur-sm",
             isMobile && "p-1 gap-1 px-2"
           )}>
-            <div className="flex gap-2">
+            {/* Centered container for play/stop buttons on mobile */}
+            <div className={cn(
+              "flex gap-2",
+              isMobile && "flex-1 justify-center"
+            )}>
               <Button
                 variant="outline"
                 size="icon"
-                onClick={handlePlayPause}
+                onClick={() => {
+                  // Always try to initialize audio on any button press on mobile
+                  if (isMobile && !audioInitialized) {
+                    initializeAudio();
+                    setTimeout(() => {
+                      handlePlayPause();
+                    }, 100);
+                  } else {
+                    handlePlayPause();
+                  }
+                }}
                 disabled={tracks.length === 0 || tracks.every((t) => !t.audioBuffer) || isLoading}
                 className={cn(
                   "bg-zinc-900 border-cyan-500/50 hover:bg-zinc-800 shadow-md",
                   isPlaying && "shadow-cyan-500/20 border-cyan-400",
-                  isMobile ? "h-7 w-7" : "h-10 w-10"
+                  isMobile ? "h-8 w-8" : "h-10 w-10"
                 )}
               >
                 <Play className={cn(
                   isPlaying ? "text-cyan-400" : "text-zinc-300",
-                  isMobile ? "h-3.5 w-3.5" : "h-5 w-5"
+                  isMobile ? "h-4 w-4" : "h-5 w-5"
                 )} />
               </Button>
               <Button 
@@ -1337,16 +1395,21 @@ export function AudioWorkspace() {
                 disabled={!isPlaying || isLoading}
                 className={cn(
                   "bg-zinc-900 border-zinc-700/80 hover:bg-zinc-800 shadow-md",
-                  isMobile ? "h-7 w-7" : "h-10 w-10"
+                  isMobile ? "h-8 w-8" : "h-10 w-10"
                 )}
               >
                 <Square className={cn(
                   "text-zinc-300",
-                  isMobile ? "h-3.5 w-3.5" : "h-5 w-5"
+                  isMobile ? "h-4 w-4" : "h-5 w-5"
                 )} />
               </Button>
             </div>
-            <div className="flex-1 flex items-center gap-1 mx-1">
+            
+            {/* Move time display to sides on mobile */}
+            <div className={cn(
+              "flex-1 flex items-center gap-1 mx-1",
+              isMobile && "hidden"
+            )}>
               <span className={cn(
                 "font-mono text-cyan-300 min-w-[40px] text-right",
                 isMobile ? "text-xs min-w-[24px]" : "text-sm"
@@ -1387,6 +1450,45 @@ export function AudioWorkspace() {
                 isMobile ? "text-xs min-w-[24px]" : "text-sm"
               )}>{formatTime(duration)}</span>
             </div>
+            
+            {/* Mobile-specific transport row that appears below the play buttons */}
+            {isMobile && (
+              <div className="w-full flex items-center gap-2 mt-1">
+                <span className="font-mono text-cyan-300 text-xs min-w-[24px] text-right">
+                  {formatTime(currentTime)}
+                </span>
+                
+                <div className="relative flex-1 group">
+                  <div className="relative h-3 flex items-center">
+                    <div className="absolute inset-y-0 left-0 w-full h-1 bg-zinc-800/90 rounded-full overflow-hidden">
+                      <div 
+                        className="absolute inset-y-0 left-0 h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full"
+                        style={{ width: `${(currentTime / duration) * 100}%` }}
+                      />
+                    </div>
+                    <div 
+                      className="absolute w-2.5 h-2.5 rounded-full bg-white border border-cyan-500 shadow-md shadow-cyan-500/50 hover:scale-125 transition-transform cursor-pointer -translate-y-[1px]"
+                      style={{ left: `calc(${(currentTime / duration) * 100}% - 5px)` }}
+                    />
+                    <input
+                      type="range"
+                      min="0"
+                      max={duration}
+                      step="0.01"
+                      value={currentTime}
+                      onChange={(e) => handleSeek([parseFloat(e.target.value)])}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      style={{ touchAction: "none" }}
+                    />
+                  </div>
+                </div>
+                
+                <span className="font-mono text-cyan-300 text-xs min-w-[24px]">
+                  {formatTime(duration)}
+                </span>
+              </div>
+            )}
+            
             {!isMobile && (
               <div className="flex items-center gap-2 bg-zinc-900/70 px-3 py-2 rounded-md border border-zinc-800/70 shadow-inner">
                 <span className="text-sm text-cyan-300">Zoom:</span>
