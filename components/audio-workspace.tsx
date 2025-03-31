@@ -5,9 +5,38 @@ import type React from "react"
 import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
-import { Play, Square, Plus, Loader2, FolderPlus, FileText } from "lucide-react"
+import { Play, Square, Plus, Loader2, FolderPlus, FileText, RotateCcw, Smartphone } from "lucide-react"
 import { AudioTrack } from "@/components/audio-track"
 import { cn } from "@/lib/utils"
+
+// Mobile device detection and orientation lock
+function useMobileOrientation() {
+  const [isPortrait, setIsPortrait] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    // Check if device is mobile
+    const checkMobile = () => {
+      const userAgent = navigator.userAgent.toLowerCase();
+      setIsMobile(
+        /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent)
+      );
+    };
+
+    // Check orientation
+    const checkOrientation = () => {
+      setIsPortrait(window.innerHeight > window.innerWidth);
+    };
+
+    checkMobile();
+    checkOrientation();
+
+    window.addEventListener('resize', checkOrientation);
+    return () => window.removeEventListener('resize', checkOrientation);
+  }, []);
+
+  return { isMobile, isPortrait };
+}
 
 interface Track {
   id: string
@@ -199,6 +228,10 @@ export function AudioWorkspace() {
     startPosition: number;
     currentPosition?: number;
   } | null>(null)
+  
+  // Add mobile-specific state
+  const { isMobile, isPortrait } = useMobileOrientation();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const audioContext = useRef<AudioContext | null>(null)
   const sourceNodes = useRef<Map<string, AudioBufferSourceNode>>(new Map())
@@ -790,8 +823,8 @@ export function AudioWorkspace() {
     
     setDragInfo(null);
     
-    document.removeEventListener('mousemove', handleDragMove);
-    document.removeEventListener('mouseup', handleDragEnd);
+    document.removeEventListener('mousemove', handleDragMove)
+    document.removeEventListener('mouseup', handleDragEnd)
   };
   
   useEffect(() => {
@@ -1065,8 +1098,23 @@ export function AudioWorkspace() {
     setShowProjectSelector(!showProjectSelector);
   };
 
+  // Toggle sidebar for mobile view
+  const toggleSidebar = () => {
+    setSidebarCollapsed(!sidebarCollapsed);
+  };
+
   return (
     <div className="w-full h-screen flex flex-col bg-zinc-950 text-white font-mono relative">
+      {/* Portrait mode warning for mobile devices */}
+      {isMobile && isPortrait && (
+        <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center p-8 text-center">
+          <Smartphone className="h-16 w-16 text-cyan-400 mb-4 animate-pulse" />
+          <h2 className="text-cyan-300 text-2xl font-bold mb-2">Please Rotate Your Device</h2>
+          <p className="text-zinc-300 mb-6">This application works best in landscape orientation.</p>
+          <RotateCcw className="h-10 w-10 text-white animate-spin" />
+        </div>
+      )}
+
       {/* Project Selector */}
       <ProjectSelector
         isVisible={showProjectSelector}
@@ -1086,28 +1134,51 @@ export function AudioWorkspace() {
       )}
       
       <div className="flex flex-col w-full h-screen max-h-screen bg-black overflow-hidden">
-        {/* Header with title and neon effect */}
-        <div className="bg-black py-3 px-4 border-b border-cyan-500/30 flex justify-between items-center">
+        {/* Header with title and neon effect - simplified for mobile */}
+        <div className={cn(
+          "bg-black py-2 px-3 border-b border-cyan-500/30 flex justify-between items-center",
+          isMobile && "py-1"
+        )}>
           <div className="flex items-center">
-            <h1 className="text-xl font-bold text-white tracking-tight flex items-center">
-              <span className="text-cyan-400 mr-2 text-2xl">⬤</span>
-              <span className="bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">MUSIC WORKSTATION</span>
-            </h1>
-            {currentProject && (
+            {isMobile ? (
+              <>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  onClick={toggleSidebar}
+                  className="mr-2 h-8 w-8 text-cyan-400"
+                >
+                  {sidebarCollapsed ? "≡" : "×"}
+                </Button>
+                <h1 className="text-base font-bold text-white tracking-tight flex items-center truncate">
+                  <span className="text-cyan-400 mr-1 text-lg">⬤</span>
+                  <span className="bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">MUSIC</span>
+                </h1>
+              </>
+            ) : (
+              <h1 className="text-xl font-bold text-white tracking-tight flex items-center">
+                <span className="text-cyan-400 mr-2 text-2xl">⬤</span>
+                <span className="bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">MUSIC WORKSTATION</span>
+              </h1>
+            )}
+            {currentProject && !isMobile && (
               <span className="ml-4 px-3 py-1 bg-zinc-800 rounded-md text-sm text-cyan-200">{currentProject}</span>
             )}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              size="sm"
+              size={isMobile ? "sm" : "default"}
               onClick={toggleProjectSelector}
-              className="bg-zinc-800 text-cyan-300 border-cyan-700/50 hover:bg-zinc-700"
+              className={cn(
+                "bg-zinc-800 text-cyan-300 border-cyan-700/50 hover:bg-zinc-700",
+                isMobile && "h-8 text-xs px-2"
+              )}
             >
-              <FolderPlus className="h-4 w-4 mr-2" />
-              Projects
+              <FolderPlus className={cn("mr-2", isMobile ? "h-3 w-3" : "h-4 w-4")} />
+              {isMobile ? "Proj" : "Projects"}
             </Button>
-            <div className="flex items-center gap-1.5">
+            <div className={cn("flex items-center gap-1.5", isMobile && "scale-90")}>
               <span className="text-xs text-zinc-400">BPM</span>
               <input
                 type="number"
@@ -1115,14 +1186,20 @@ export function AudioWorkspace() {
                 max="240"
                 value={bpm}
                 onChange={(e) => setBpm(parseInt(e.target.value) || 168)}
-                className="w-16 h-8 px-2 rounded-md bg-zinc-900 text-cyan-200 border border-zinc-700 text-center"
+                className={cn(
+                  "w-16 px-2 rounded-md bg-zinc-900 text-cyan-200 border border-zinc-700 text-center",
+                  isMobile ? "h-7 w-12 text-xs" : "h-8"
+                )}
               />
             </div>
           </div>
         </div>
         
-        {/* Transport Controls - futuristic styling improvements */}
-        <div className="flex items-center gap-3 p-4 border-b border-zinc-800/70 bg-zinc-950/80 backdrop-blur-sm">
+        {/* Transport Controls - simplified for mobile */}
+        <div className={cn(
+          "flex items-center gap-3 p-4 border-b border-zinc-800/70 bg-zinc-950/80 backdrop-blur-sm",
+          isMobile && "p-2 gap-2"
+        )}>
           <div className="flex gap-2">
             <Button
               variant="outline"
@@ -1130,27 +1207,43 @@ export function AudioWorkspace() {
               onClick={handlePlayPause}
               disabled={tracks.length === 0 || tracks.every((t) => !t.audioBuffer) || isLoading}
               className={cn(
-                "bg-zinc-900 border-cyan-500/50 hover:bg-zinc-800 h-10 w-10 shadow-md",
-                isPlaying && "shadow-cyan-500/20 border-cyan-400"
+                "bg-zinc-900 border-cyan-500/50 hover:bg-zinc-800 shadow-md",
+                isPlaying && "shadow-cyan-500/20 border-cyan-400",
+                isMobile ? "h-8 w-8" : "h-10 w-10"
               )}
             >
-              <Play className={cn("h-5 w-5", isPlaying ? "text-cyan-400" : "text-zinc-300")} />
+              <Play className={cn(
+                isPlaying ? "text-cyan-400" : "text-zinc-300",
+                isMobile ? "h-4 w-4" : "h-5 w-5"
+              )} />
             </Button>
             <Button 
               variant="outline" 
               size="icon" 
               onClick={handleStop} 
               disabled={!isPlaying || isLoading}
-              className="bg-zinc-900 border-zinc-700/80 hover:bg-zinc-800 h-10 w-10 shadow-md"
+              className={cn(
+                "bg-zinc-900 border-zinc-700/80 hover:bg-zinc-800 shadow-md",
+                isMobile ? "h-8 w-8" : "h-10 w-10"
+              )}
             >
-              <Square className="h-5 w-5 text-zinc-300" />
+              <Square className={cn(
+                "text-zinc-300",
+                isMobile ? "h-4 w-4" : "h-5 w-5"
+              )} />
             </Button>
           </div>
-          <div className="flex-1 flex items-center gap-3 mx-2">
-            <span className="text-sm font-mono text-cyan-300 min-w-[40px] text-right">{formatTime(currentTime)}</span>
+          <div className="flex-1 flex items-center gap-2 mx-1">
+            <span className={cn(
+              "font-mono text-cyan-300 min-w-[40px] text-right",
+              isMobile ? "text-xs min-w-[30px]" : "text-sm"
+            )}>{formatTime(currentTime)}</span>
             <div className="relative flex-1 group">
               <div className="absolute -inset-1 bg-gradient-to-r from-cyan-500/30 to-blue-500/30 opacity-0 group-hover:opacity-100 group-active:opacity-100 rounded-full blur-sm transition-opacity"></div>
-              <div className="relative z-10 h-5 flex items-center">
+              <div className={cn(
+                "relative z-10 flex items-center",
+                isMobile ? "h-4" : "h-5"
+              )}>
                 <div className="absolute inset-y-0 left-0 w-full h-1 bg-zinc-800/90 rounded-full overflow-hidden">
                   <div 
                     className="absolute inset-y-0 left-0 h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full"
@@ -1173,76 +1266,121 @@ export function AudioWorkspace() {
                 />
               </div>
             </div>
-            <span className="text-sm font-mono text-cyan-300 min-w-[40px]">{formatTime(duration)}</span>
+            <span className={cn(
+              "font-mono text-cyan-300 min-w-[40px]",
+              isMobile ? "text-xs min-w-[30px]" : "text-sm"
+            )}>{formatTime(duration)}</span>
           </div>
-          <div className="flex items-center gap-2 bg-zinc-900/70 px-3 py-2 rounded-md border border-zinc-800/70 shadow-inner">
-            <span className="text-sm text-cyan-300">Zoom:</span>
-            <Slider
-              value={[zoom]}
-              min={10}
-              max={100}
-              step={1}
-              onValueChange={(value) => setZoom(value[0])}
-              className="w-36"
-            />
-          </div>
+          {!isMobile && (
+            <div className="flex items-center gap-2 bg-zinc-900/70 px-3 py-2 rounded-md border border-zinc-800/70 shadow-inner">
+              <span className="text-sm text-cyan-300">Zoom:</span>
+              <Slider
+                value={[zoom]}
+                min={10}
+                max={100}
+                step={1}
+                onValueChange={(value) => setZoom(value[0])}
+                className="w-36"
+              />
+            </div>
+          )}
         </div>
 
-        {/* BPM and Loop Controls - futuristic styling */}
-        <div className="flex items-center gap-4 p-3 border-b border-zinc-800/70 bg-zinc-950 shadow-md">
-          <div className="flex items-center gap-2 bg-zinc-900/70 rounded-md px-3 py-1.5 border border-zinc-800/70 shadow-inner">
-            <span className="text-sm font-medium text-cyan-300">BPM:</span>
-            <div className="flex items-center">
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="h-7 px-2 text-cyan-300 hover:bg-zinc-800 hover:text-cyan-200" 
-                onClick={() => setBpm(Math.max(40, bpm - 1))}
-              >
-                -
-              </Button>
-              <input 
-                type="number" 
-                value={bpm} 
-                onChange={(e) => setBpm(Number(e.target.value))} 
-                className="w-16 h-7 text-center border-y border-zinc-700 bg-zinc-950 text-cyan-200" 
-                min="40" 
-                max="300"
+        {/* Condensed BPM and Loop Controls for mobile */}
+        {isMobile ? (
+          <div className="flex items-center justify-between p-1 border-b border-zinc-800/70 bg-zinc-950 shadow-md">
+            <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1 bg-zinc-900/70 rounded-md px-2 py-1 border border-zinc-800/70 shadow-inner">
+                <span className="text-xs font-medium text-cyan-300">Loop:</span>
+                <Button 
+                  variant={isLooping ? "default" : "outline"} 
+                  size="sm" 
+                  className={cn(
+                    "h-6 min-w-[35px] px-1.5 text-xs",
+                    isLooping 
+                      ? "bg-cyan-600/80 hover:bg-cyan-700 text-white shadow-md shadow-cyan-500/20 border-none" 
+                      : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700"
+                  )}
+                  onClick={() => setIsLooping(!isLooping)}
+                >
+                  {isLooping ? "On" : "Off"}
+                </Button>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 px-2">
+              <span className="text-xs text-cyan-300">Zoom:</span>
+              <Slider
+                value={[zoom]}
+                min={10}
+                max={100}
+                step={1}
+                onValueChange={(value) => setZoom(value[0])}
+                className="w-24"
               />
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-4 p-3 border-b border-zinc-800/70 bg-zinc-950 shadow-md">
+            <div className="flex items-center gap-2 bg-zinc-900/70 rounded-md px-3 py-1.5 border border-zinc-800/70 shadow-inner">
+              <span className="text-sm font-medium text-cyan-300">BPM:</span>
+              <div className="flex items-center">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="h-7 px-2 text-cyan-300 hover:bg-zinc-800 hover:text-cyan-200" 
+                  onClick={() => setBpm(Math.max(40, bpm - 1))}
+                >
+                  -
+                </Button>
+                <input 
+                  type="number" 
+                  value={bpm} 
+                  onChange={(e) => setBpm(Number(e.target.value))} 
+                  className="w-16 h-7 text-center border-y border-zinc-700 bg-zinc-950 text-cyan-200" 
+                  min="40" 
+                  max="300"
+                />
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="h-7 px-2 text-cyan-300 hover:bg-zinc-800 hover:text-cyan-200" 
+                  onClick={() => setBpm(Math.min(300, bpm + 1))}
+                >
+                  +
+                </Button>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 bg-zinc-900/70 rounded-md px-3 py-1.5 border border-zinc-800/70 shadow-inner">
+              <span className="text-sm font-medium text-cyan-300">Loop:</span>
               <Button 
-                variant="ghost" 
+                variant={isLooping ? "default" : "outline"} 
                 size="sm" 
-                className="h-7 px-2 text-cyan-300 hover:bg-zinc-800 hover:text-cyan-200" 
-                onClick={() => setBpm(Math.min(300, bpm + 1))}
+                className={cn(
+                  "h-7 min-w-[40px]",
+                  isLooping 
+                    ? "bg-cyan-600/80 hover:bg-cyan-700 text-white shadow-md shadow-cyan-500/20 border-none" 
+                    : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700"
+                )}
+                onClick={() => setIsLooping(!isLooping)}
               >
-                +
+                {isLooping ? "On" : "Off"}
               </Button>
             </div>
           </div>
-          <div className="flex items-center gap-2 bg-zinc-900/70 rounded-md px-3 py-1.5 border border-zinc-800/70 shadow-inner">
-            <span className="text-sm font-medium text-cyan-300">Loop:</span>
-            <Button 
-              variant={isLooping ? "default" : "outline"} 
-              size="sm" 
-              className={cn(
-                "h-7 min-w-[40px]",
-                isLooping 
-                  ? "bg-cyan-600/80 hover:bg-cyan-700 text-white shadow-md shadow-cyan-500/20 border-none" 
-                  : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border-zinc-700"
-              )}
-              onClick={() => setIsLooping(!isLooping)}
-            >
-              {isLooping ? "On" : "Off"}
-            </Button>
-          </div>
-        </div>
+        )}
 
         {/* Tracks Container - Main area with full height */}
         <div className="flex flex-col flex-1 overflow-hidden relative bg-black">
-          {/* Timeline */}
-          <div className="flex h-9 border-b border-zinc-800/70 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-10">
-            <div className="w-52 h-full border-r border-zinc-800/70 flex items-center justify-center bg-zinc-900/80">
-              <span className="text-xs font-medium text-cyan-400/80">BARS</span>
+          {/* Timeline - simplified for mobile */}
+          <div className={cn(
+            "flex border-b border-zinc-800/70 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-10",
+            isMobile ? "h-6" : "h-9"
+          )}>
+            <div className={cn(
+              "border-r border-zinc-800/70 flex items-center justify-center bg-zinc-900/80",
+              isMobile ? (sidebarCollapsed ? "w-8" : "w-36") : "w-52"
+            )}>
+              {!isMobile && <span className="text-xs font-medium text-cyan-400/80">BARS</span>}
             </div>
             
             <div className="relative flex-1 overflow-hidden">
@@ -1282,7 +1420,10 @@ export function AudioWorkspace() {
                         "absolute top-0 left-0 h-full flex items-center",
                         isCurrentBar ? "text-cyan-400 font-bold" : "text-zinc-500"
                       )}>
-                        <span className="text-xs pl-1">{i+1}</span>
+                        <span className={cn(
+                          "pl-1",
+                          isMobile ? "text-[10px]" : "text-xs"
+                        )}>{i+1}</span>
                       </div>
                       
                       <div 
@@ -1311,107 +1452,185 @@ export function AudioWorkspace() {
           {/* Tracks */}
           <div className="flex-1 overflow-hidden relative">
             <div className="flex h-full">
-              {/* Track controls sidebar - futuristic styling */}
+              {/* Track controls sidebar - conditionally show based on mobile state */}
               <div 
                 ref={sidebarRef}
-                className="w-52 flex flex-col border-r border-zinc-800/70 bg-zinc-900/50 flex-shrink-0 overflow-y-auto"
+                className={cn(
+                  "flex flex-col border-r border-zinc-800/70 bg-zinc-900/50 flex-shrink-0 overflow-y-auto transition-all duration-200",
+                  isMobile 
+                    ? (sidebarCollapsed ? "w-8" : "w-36") 
+                    : "w-52"
+                )}
               >
                 {tracks.map((track) => (
-                  <div key={track.id} className="border-b border-zinc-800/70 p-2 h-32 flex flex-col justify-between">
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className={cn("w-3 h-3 rounded-full shadow-[0_0_5px]", track.color, track.color.replace('bg-', 'shadow-'))} />
-                      <input
-                        type="text"
-                        value={track.name}
-                        onChange={(e) => handleTrackUpdate(track.id, { name: e.target.value })}
-                        className="bg-zinc-900 border border-zinc-800 rounded-md px-2 py-1 text-sm w-full text-zinc-200 focus:border-cyan-500/70 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
-                      />
-                    </div>
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <button
-                        className={cn(
-                          "w-7 h-7 flex items-center justify-center rounded-md shadow-md transition-colors",
-                          track.muted 
-                            ? "bg-red-600/90 text-white shadow-red-500/20" 
-                            : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
-                        )}
-                        onClick={() => handleTrackUpdate(track.id, { muted: !track.muted })}
-                      >
-                        <span className="sr-only">{track.muted ? "Unmute" : "Mute"}</span>
-                        <span className="text-xs font-medium">M</span>
-                      </button>
-                      <button
-                        className={cn(
-                          "w-7 h-7 flex items-center justify-center rounded-md shadow-md transition-colors",
-                          track.solo 
-                            ? "bg-amber-500/90 text-amber-950 shadow-amber-400/20" 
-                            : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
-                        )}
-                        onClick={() => handleTrackUpdate(track.id, { solo: !track.solo })}
-                      >
-                        <span className="sr-only">{track.solo ? "Unsolo" : "Solo"}</span>
-                        <span className="text-xs font-medium">S</span>
-                      </button>
-                      <div className="flex flex-col gap-1 w-full pr-1">
-                        <div className="flex items-center justify-between text-[10px] text-zinc-400">
-                          <span>Vol</span>
-                          <span>{Math.round(track.volume * 100)}%</span>
+                  <div 
+                    key={track.id} 
+                    className={cn(
+                      "border-b border-zinc-800/70 flex flex-col justify-between",
+                      isMobile ? (sidebarCollapsed ? "h-20 p-1" : "h-24 p-1") : "h-32 p-2"
+                    )}
+                  >
+                    {sidebarCollapsed && isMobile ? (
+                      // Collapsed mobile view - just show colored indicator and minimal controls
+                      <div className="flex flex-col h-full items-center justify-between py-1">
+                        <div className={cn("w-3 h-3 rounded-full shadow-[0_0_5px]", track.color, track.color.replace('bg-', 'shadow-'))} />
+                        <div className="flex flex-col gap-1 items-center">
+                          <button
+                            className={cn(
+                              "w-6 h-6 flex items-center justify-center rounded-md shadow-md transition-colors",
+                              track.muted 
+                                ? "bg-red-600/90 text-white shadow-red-500/20" 
+                                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
+                            )}
+                            onClick={() => handleTrackUpdate(track.id, { muted: !track.muted })}
+                          >
+                            <span className="text-[10px] font-medium">M</span>
+                          </button>
+                          <button
+                            className={cn(
+                              "w-6 h-6 flex items-center justify-center rounded-md shadow-md transition-colors",
+                              track.solo 
+                                ? "bg-amber-500/90 text-amber-950 shadow-amber-400/20" 
+                                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
+                            )}
+                            onClick={() => handleTrackUpdate(track.id, { solo: !track.solo })}
+                          >
+                            <span className="text-[10px] font-medium">S</span>
+                          </button>
                         </div>
-                        <VolumeSlider 
-                          value={track.volume} 
-                          onChange={(value) => handleTrackUpdate(track.id, { volume: value })}
-                          trackColor={track.muted ? "bg-zinc-600/50" : track.color.replace('bg-', 'bg-') + "/80"}
-                        />
                       </div>
-                    </div>
-                    <div className="flex flex-col w-full mb-1">
-                      <div className="flex items-center justify-between text-[10px] text-zinc-400">
-                        <span>RMS</span>
-                        <span>{Math.round((rmsLevels[track.id] || 0) * 100)}%</span>
-                      </div>
-                      <LoudnessMeter 
-                        level={rmsLevels[track.id] || 0} 
-                        className="h-1.5 w-full"
-                      />
-                    </div>
-                    <div className="flex items-center gap-1.5 justify-between">
-                      <input
-                        type="file"
-                        accept="audio/*"
-                        className="hidden"
-                        id={`file-${track.id}`}
-                        onChange={(e) => handleFileUpload(e, track.id)}
-                      />
-                      <label
-                        htmlFor={`file-${track.id}`}
-                        className="text-xs px-3 py-1.5 bg-zinc-800 text-cyan-300 rounded-md cursor-pointer hover:bg-zinc-700 shadow-sm transition-colors flex-grow text-center"
-                      >
-                        Upload
-                      </label>
-                      <button
-                        className="text-xs px-3 py-1.5 bg-red-600/80 text-white rounded-md hover:bg-red-700 shadow-sm transition-colors flex-grow text-center"
-                        onClick={() => handleRemoveTrack(track.id)}
-                      >
-                        Remove
-                      </button>
-                    </div>
+                    ) : (
+                      // Full sidebar view - desktop or expanded mobile
+                      <>
+                        <div className="flex items-center gap-1 mb-1">
+                          <div className={cn("w-3 h-3 rounded-full shadow-[0_0_5px]", track.color, track.color.replace('bg-', 'shadow-'))} />
+                          <input
+                            type="text"
+                            value={track.name}
+                            onChange={(e) => handleTrackUpdate(track.id, { name: e.target.value })}
+                            className={cn(
+                              "bg-zinc-900 border border-zinc-800 rounded-md px-2 py-1 w-full text-zinc-200 focus:border-cyan-500/70 focus:outline-none focus:ring-1 focus:ring-cyan-500/30",
+                              isMobile ? "text-xs" : "text-sm"
+                            )}
+                          />
+                        </div>
+                        <div className="flex items-center gap-1 mb-1">
+                          <button
+                            className={cn(
+                              "flex items-center justify-center rounded-md shadow-md transition-colors",
+                              track.muted 
+                                ? "bg-red-600/90 text-white shadow-red-500/20" 
+                                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200",
+                              isMobile ? "w-6 h-6" : "w-7 h-7"
+                            )}
+                            onClick={() => handleTrackUpdate(track.id, { muted: !track.muted })}
+                          >
+                            <span className={cn(
+                              "font-medium",
+                              isMobile ? "text-[10px]" : "text-xs"
+                            )}>M</span>
+                          </button>
+                          <button
+                            className={cn(
+                              "flex items-center justify-center rounded-md shadow-md transition-colors",
+                              track.solo 
+                                ? "bg-amber-500/90 text-amber-950 shadow-amber-400/20" 
+                                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200",
+                              isMobile ? "w-6 h-6" : "w-7 h-7"
+                            )}
+                            onClick={() => handleTrackUpdate(track.id, { solo: !track.solo })}
+                          >
+                            <span className={cn(
+                              "font-medium",
+                              isMobile ? "text-[10px]" : "text-xs"
+                            )}>S</span>
+                          </button>
+                          <div className="flex flex-col gap-1 w-full pr-1">
+                            <div className="flex items-center justify-between text-[10px] text-zinc-400">
+                              <span>Vol</span>
+                              <span>{Math.round(track.volume * 100)}%</span>
+                            </div>
+                            <VolumeSlider 
+                              value={track.volume} 
+                              onChange={(value) => handleTrackUpdate(track.id, { volume: value })}
+                              trackColor={track.muted ? "bg-zinc-600/50" : track.color.replace('bg-', 'bg-') + "/80"}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex flex-col w-full mb-1">
+                          <LoudnessMeter 
+                            level={rmsLevels[track.id] || 0} 
+                            className="h-1.5 w-full"
+                          />
+                        </div>
+                        {!isMobile && (
+                          <div className="flex items-center gap-1.5 justify-between">
+                            <input
+                              type="file"
+                              accept="audio/*"
+                              className="hidden"
+                              id={`file-${track.id}`}
+                              onChange={(e) => handleFileUpload(e, track.id)}
+                            />
+                            <label
+                              htmlFor={`file-${track.id}`}
+                              className="text-xs px-3 py-1.5 bg-zinc-800 text-cyan-300 rounded-md cursor-pointer hover:bg-zinc-700 shadow-sm transition-colors flex-grow text-center"
+                            >
+                              Upload
+                            </label>
+                            <button
+                              className="text-xs px-3 py-1.5 bg-red-600/80 text-white rounded-md hover:bg-red-700 shadow-sm transition-colors flex-grow text-center"
+                              onClick={() => handleRemoveTrack(track.id)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                        {isMobile && (
+                          <button
+                            className="text-[10px] px-2 py-1 bg-red-600/80 text-white rounded-md hover:bg-red-700 shadow-sm transition-colors text-center"
+                            onClick={() => handleRemoveTrack(track.id)}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </>
+                    )}
                   </div>
                 ))}
                 
-                <div className="p-2 mt-auto bg-zinc-900/80 border-t border-zinc-800/70">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={handleAddTrack} 
-                    className="w-full bg-zinc-800 border-cyan-500/50 text-cyan-300 hover:bg-zinc-700 hover:text-cyan-200 shadow-md"
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Track
-                  </Button>
+                <div className={cn(
+                  "mt-auto bg-zinc-900/80 border-t border-zinc-800/70",
+                  isMobile ? (sidebarCollapsed ? "p-1" : "p-1.5") : "p-2"
+                )}>
+                  {!sidebarCollapsed && (
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={handleAddTrack} 
+                      className={cn(
+                        "w-full bg-zinc-800 border-cyan-500/50 text-cyan-300 hover:bg-zinc-700 hover:text-cyan-200 shadow-md",
+                        isMobile && "text-xs py-1 h-7"
+                      )}
+                    >
+                      <Plus className={cn("mr-1", isMobile ? "h-3 w-3" : "h-4 w-4")} />
+                      {isMobile ? "Add" : "Add Track"}
+                    </Button>
+                  )}
+                  {sidebarCollapsed && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleAddTrack}
+                      className="w-full h-6 p-0 bg-zinc-800 border-cyan-500/50 text-cyan-300"
+                    >
+                      <Plus className="h-3 w-3" />
+                    </Button>
+                  )}
                 </div>
               </div>
               
-              {/* Track content area - futuristic styling */}
+              {/* Track content area */}
               <div 
                 ref={trackContentRef} 
                 className="flex-1 overflow-auto relative"
@@ -1470,7 +1689,10 @@ export function AudioWorkspace() {
                   {tracks.map((track) => (
                     <div 
                       key={track.id}
-                      className="relative h-32 border-b border-zinc-900/70"
+                      className={cn(
+                        "relative border-b border-zinc-900/70",
+                        isMobile ? "h-20" : "h-32"
+                      )}
                     >
                       {track.audioBuffer && (
                         <div 
@@ -1496,11 +1718,20 @@ export function AudioWorkspace() {
                           <div className="absolute -left-0.5 top-0 bottom-0 w-0.5 bg-white/70"></div>
                           <div className="absolute -right-0.5 top-0 bottom-0 w-0.5 bg-white/70"></div>
                           
-                          <div className="absolute inset-0 flex flex-col justify-between px-3 py-1.5 text-xs text-white select-none">
+                          <div className={cn(
+                            "absolute inset-0 flex flex-col justify-between px-3 py-1.5 select-none",
+                            isMobile ? "px-2 py-1" : "px-3 py-1.5" 
+                          )}>
                             <div className="w-full overflow-hidden">
                               <div className="flex items-center justify-between">
-                                <span className="font-medium truncate max-w-[85%]">{track.name}</span>
-                                <span className="bg-black/50 px-1.5 py-0.5 rounded text-[9px]">{formatTime(track.audioBuffer.duration)}</span>
+                                <span className={cn(
+                                  "font-medium truncate max-w-[85%]",
+                                  isMobile ? "text-[10px]" : "text-xs"
+                                )}>{track.name}</span>
+                                <span className={cn(
+                                  "bg-black/50 px-1.5 py-0.5 rounded",
+                                  isMobile ? "text-[8px] px-1 py-0.5" : "text-[9px]"
+                                )}>{formatTime(track.audioBuffer.duration)}</span>
                               </div>
                             </div>
                           </div>
