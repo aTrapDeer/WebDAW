@@ -211,6 +211,23 @@ const ProjectSelector = ({
   );
 };
 
+// Near the top where other functions are defined, add this function
+function unlockAudioOnIOS() {
+  // Create and play a silent audio element
+  const silentSound = new Audio("data:audio/mp3;base64,//MkxAAHiAICWABElBeKPL/RANb2w+yiT1g/gTok//lP/W/l3h8QO/OCdCqCW2Cw//MkxAQHkAIWUAhEmAQXWUOFW2dxPu//9mr60ElY5sseQ+xxesmHKtZr7bsqqX2L//MkxAgHAAJPUAhEmAQXWTq77oqTMJ5tsrrCqXWUTbt7rkqn3///9FSSFlSq//MkxBQHkAYiUAhFBCi6CoWwlCoGnmzE3FBGTBYy4AG3CBJx8fFgJh4eHhwGOgon/9pcOIHCwcLDwsNCg4OD/8QAAASQAAAITEFNRTMuOTkuNVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV");
+  silentSound.setAttribute('playsinline', 'true');
+  silentSound.loop = false;
+  silentSound.volume = 0;
+  
+  // iOS requires user interaction
+  document.addEventListener('touchstart', function unlockAudio() {
+    silentSound.play().catch(e => console.warn("Silent audio failed", e));
+    document.removeEventListener('touchstart', unlockAudio);
+  }, false);
+  
+  return silentSound;
+}
+
 export function AudioWorkspace() {
   const [tracks, setTracks] = useState<Track[]>([])
   const [isPlaying, setIsPlaying] = useState(false)
@@ -429,48 +446,54 @@ export function AudioWorkspace() {
   }
 
   const startPlayback = () => {
-    if (!audioContext.current || tracks.length === 0) return
+    if (!audioContext.current || tracks.length === 0) return;
 
     if (audioContext.current.state === "suspended") {
-      audioContext.current.resume()
+      audioContext.current.resume().catch(err => {
+        console.warn("Could not resume AudioContext", err);
+        // For iOS, suggest user enable sound
+        if (isMobile) {
+          alert("Please enable sound on your device to play audio");
+        }
+      });
     }
 
-    stopPlayback(false)
+    stopPlayback(false);
 
     tracks.forEach((track) => {
-      if (!track.audioBuffer || !audioContext.current) return
+      if (!track.audioBuffer || !audioContext.current) return;
 
       const trackPosition = track.position || 0;
       if (trackPosition > pausedAt.current) {
         return;
       }
 
-      const source = audioContext.current.createBufferSource()
-      source.buffer = track.audioBuffer
+      const source = audioContext.current.createBufferSource();
+      source.buffer = track.audioBuffer;
       source.playbackRate.value = 1.0;
 
-      const gainNode = audioContext.current.createGain()
-      gainNode.gain.value = track.muted ? 0 : track.volume
+      const gainNode = audioContext.current.createGain();
+      gainNode.gain.value = track.muted ? 0 : track.volume;
       
       // Create analyzer node for RMS calculation
       const analyzerNode = audioContext.current.createAnalyser();
       analyzerNode.fftSize = 256;
       analyzerNode.smoothingTimeConstant = 0.8;
       
-      source.connect(gainNode)
-      gainNode.connect(analyzerNode)
-      analyzerNode.connect(audioContext.current.destination)
+      source.connect(gainNode);
+      gainNode.connect(analyzerNode);
+      analyzerNode.connect(audioContext.current.destination);
 
-      sourceNodes.current.set(track.id, source)
-      gainNodes.current.set(track.id, gainNode)
-      analyzerNodes.current.set(track.id, analyzerNode)
+      sourceNodes.current.set(track.id, source);
+      gainNodes.current.set(track.id, gainNode);
+      analyzerNodes.current.set(track.id, analyzerNode);
 
       const offsetInTrack = Math.max(0, pausedAt.current - trackPosition);
       source.start(0, offsetInTrack);
-    })
+    });
 
-    startTime.current = audioContext.current.currentTime
-    setIsPlaying(true)
+    startTime.current = audioContext.current.currentTime;
+    setIsPlaying(true);
   }
 
   const stopPlayback = (resetPosition = true) => {
@@ -576,6 +599,9 @@ export function AudioWorkspace() {
         if (trackIndex !== -1) {
           updatedTracks[trackIndex] = { ...updatedTracks[trackIndex], solo: updates.solo };
         }
+        
+        // Fix linter error - only proceed if audioContext exists
+        if (!audioContext.current) return;
         
         const hasSoloedTracks = updatedTracks.some(t => t.solo);
         
@@ -1102,6 +1128,46 @@ export function AudioWorkspace() {
   const toggleSidebar = () => {
     setSidebarCollapsed(!sidebarCollapsed);
   };
+
+  // Add this useEffect to handle iOS audio unlock and AudioContext initialization
+  useEffect(() => {
+    // For iOS silent mode
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                 (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    
+    let silentAudio: HTMLAudioElement | null = null;
+    if (isIOS || isMobile) {
+      silentAudio = unlockAudioOnIOS();
+    }
+    
+    // Initialize AudioContext
+    if (typeof window !== "undefined" && !audioContext.current) {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContext) {
+        audioContext.current = new AudioContext();
+        
+        // For iOS/mobile, ensure context resumes on user interaction
+        const resumeAudioContext = () => {
+          if (audioContext.current && audioContext.current.state === 'suspended') {
+            audioContext.current.resume().catch(e => console.warn("Failed to resume context", e));
+          }
+        };
+        
+        const events = ['touchstart', 'touchend', 'mousedown', 'keydown'];
+        events.forEach(event => document.addEventListener(event, resumeAudioContext, {once: true}));
+      }
+    }
+
+    return () => {
+      if (audioContext.current) {
+        audioContext.current.close();
+      }
+      if (silentAudio) {
+        silentAudio.pause();
+        silentAudio.src = '';
+      }
+    }
+  }, [isMobile]);
 
   return (
     <div className="w-full h-screen flex flex-col bg-zinc-950 text-white font-mono relative">
